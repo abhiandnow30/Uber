@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+server/.data/
+server/.dev-mailbox/
+coverage/
+*.log
+e2e-screens/
+server-dev.log

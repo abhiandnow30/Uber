@@ -1,0 +1,34 @@
+{
+  "name": "employee-cab-booking",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Employee Cab Booking and Fleet Management System",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:memdb": "concurrently -n server,client -c blue,green \"npm run dev:memdb -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w server && npm run build -w client",
+    "start": "npm run start -w server",
+    "test": "npm run test -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "seed": "npm run seed -w server",
+    "seed:memdb": "npm run seed:memdb -w server",
+    "test:ui": "npm run test:ui -w server",
+    "test-mail": "npm run test-mail -w server --"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.6"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "overrides": {
+    "uuid": "11.1.1",
+    "vite": "6.4.4",
+    "postcss": "8.5.30",
+    "tsx": "4.23.15"
+  }
+}

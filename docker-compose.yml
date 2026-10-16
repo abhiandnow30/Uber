@@ -1,0 +1,28 @@
+# Local / staging stack: MongoDB single-node replica set + the app.
+# Transactions require a replica set, so mongo starts with --replSet and is
+# initiated by the healthcheck.
+services:
+  mongo:
+    image: mongo:7.0
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports: ["27017:27017"]
+    volumes: ["mongo-data:/data/db"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok }"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      mongo:
+        condition: service_healthy
+    env_file: server/.env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/cab_booking?replicaSet=rs0
+      PORT: 4000
+    ports: ["4000:4000"]
+
+volumes:
+  mongo-data:
