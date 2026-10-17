@@ -20,6 +20,7 @@ import {
 } from '../services/sso.service.js';
 import { AppError } from '../utils/errors.js';
 import { logger } from '../logger.js';
+import { coordinatorPhoneLogin } from '../services/coordinatorAuth.service.js';
 import { driverPhoneLogin } from '../services/driverAuth.service.js';
 
 export const authRouter = Router();
@@ -47,6 +48,13 @@ authRouter.post('/login', authLimiter, async (req, res) => {
 authRouter.post('/driver-login', authLimiter, async (req, res) => {
   const input = body(z.object({ phone: z.string().trim().min(6).max(25), vehicleLast4: z.string().trim().min(4).max(10) }), req);
   const { user, session } = await driverPhoneLogin(input.phone, input.vehicleLast4, meta(req));
+  setAuthCookies(res, session.token, session.csrfToken, session.expiresAt);
+  res.json({ user: { id: user._id, name: user.name, role: user.role }, csrfToken: session.csrfToken });
+});
+
+authRouter.post('/coordinator-login', authLimiter, async (req, res) => {
+  const input = body(z.object({ email: z.string().trim().min(3).max(254), phone: z.string().trim().min(6).max(25) }), req);
+  const { user, session } = await coordinatorPhoneLogin(input.email, input.phone, meta(req));
   setAuthCookies(res, session.token, session.csrfToken, session.expiresAt);
   res.json({ user: { id: user._id, name: user.name, role: user.role }, csrfToken: session.csrfToken });
 });

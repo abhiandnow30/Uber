@@ -37,14 +37,13 @@ type Assignment = {
 };
 type CoordinatorData = CoordinatorRow & { activity: AuditEntry[]; assignments: Assignment[] };
 
-type ActionKey = 'activate' | 'deactivate' | 'suspend' | 'reinvite' | 'resend';
+type ActionKey = 'activate' | 'deactivate' | 'suspend';
+// Coordinators sign in with email + mobile number, so there are no invitations to send.
 const ACTIONS_BY_STATUS: Record<string, ActionKey[]> = {
-  INVITED: ['resend', 'deactivate'],
+  INVITED: ['deactivate'],
   ACTIVE: ['suspend', 'deactivate'],
   SUSPENDED: ['activate', 'deactivate'],
-  INACTIVE: ['activate', 'reinvite'],
-  REJECTED: ['reinvite'],
-  PENDING_ADMIN_REVIEW: ['reinvite'],
+  INACTIVE: ['activate'],
 };
 
 function EditModal({ open, onClose, coord }: { open: boolean; onClose: () => void; coord: CoordinatorData }) {
@@ -131,12 +130,6 @@ export default function CoordinatorDetail() {
     invalidate,
     silentError: true,
   });
-  const resend = useAction(() => post<{ expiresAt: string }>(`/admin/coordinators/${id}/invitation`), {
-    success: (r) => `Invitation sent. Link expires ${fmtDateTime(r.expiresAt)}`,
-    invalidate,
-    silentError: true,
-  });
-
   if (isLoading) return <Spinner />;
   if (error || !data) return <ErrorState error={error} onRetry={refetch} />;
   const status = data.user?.status ?? '';
@@ -167,22 +160,6 @@ export default function CoordinatorDetail() {
       message: <p>{data.fullName} is signed out and blocked until reactivated.</p>,
       reasonLabel: 'Reason for suspension',
       run: (reason) => setStatus.mutateAsync({ status: 'SUSPENDED', reason }),
-    },
-    reinvite: {
-      label: 'Re-invite',
-      variant: 'primary',
-      title: 'Re-invite coordinator',
-      tone: 'primary',
-      message: <p>The account moves to “Invited” and a new activation email is sent to {data.email}.</p>,
-      run: () => setStatus.mutateAsync({ status: 'INVITED' }),
-    },
-    resend: {
-      label: 'Resend invitation',
-      variant: 'secondary',
-      title: 'Resend invitation',
-      tone: 'primary',
-      message: <p>A new activation link is emailed to {data.email}. Earlier links stop working.</p>,
-      run: () => resend.mutateAsync(undefined),
     },
   };
   const current = action ? defs[action] : null;

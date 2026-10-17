@@ -44,7 +44,7 @@ export function adminsUseMicrosoft() {
 
 /** Drivers sign in only with their mobile number and vehicle number; employees possibly only with Microsoft. */
 function usesPassword(role: string) {
-  if (role === 'DRIVER') return false;
+  if (role === 'DRIVER' || role === 'COORDINATOR') return false;
   return !(role === 'EMPLOYEE' && employeesUseMicrosoftOnly());
 }
 
@@ -53,8 +53,8 @@ const invalidCredentials = () =>
     401,
     'INVALID_CREDENTIALS',
     employeesUseMicrosoftOnly()
-      ? 'Invalid email or password. Employees: use "Sign in with Microsoft". Drivers: use "Sign in with your mobile number".'
-      : 'Invalid email or password. Drivers: use "Sign in with your mobile number". If you are not registered yet, please contact your administrator.',
+      ? 'Invalid email or password. Employees: use "Sign in with Microsoft". Coordinators: use "Sign in with email and mobile number". Drivers: use "Sign in with your mobile number".'
+      : 'Invalid email or password. Coordinators: use "Sign in with email and mobile number". Drivers: use "Sign in with your mobile number". If you are not registered yet, please contact your administrator.',
   );
 
 export function normalizeEmail(email: string) {
@@ -107,6 +107,7 @@ export async function issueActivation(
 ) {
   const role = (await User.findById(user._id, { role: 1 }).session(session).lean())?.role ?? '';
   if (role === 'DRIVER') throw new AppError(409, 'MOBILE_SIGN_IN_ONLY', 'Drivers sign in with their mobile number and vehicle number; no invitation is needed.');
+  if (role === 'COORDINATOR') throw new AppError(409, 'MOBILE_SIGN_IN_ONLY', 'Coordinators sign in with their email and mobile number; no invitation is needed.');
   if (role === 'ADMIN' && adminsUseMicrosoft()) throw new AppError(409, 'MICROSOFT_SIGN_IN_ONLY', 'Admins sign in with Microsoft using their work email; no invitation is needed.');
   if (!usesPassword(role)) throw new AppError(409, 'MICROSOFT_SIGN_IN_ONLY', 'Employees activate their account by signing in with Microsoft; no invitation is needed.');
   await AuthToken.updateMany(
@@ -142,6 +143,7 @@ async function consumeToken(token: string, purpose: 'ACTIVATION' | 'PASSWORD_RES
   if (!doc) throw new AppError(400, 'INVALID_TOKEN', 'This link is invalid, expired or has already been used. Ask your administrator for a new one.');
   const role = (await User.findById(doc.user, { role: 1 }).session(session).lean())?.role ?? '';
   if (role === 'DRIVER') throw new AppError(400, 'MOBILE_SIGN_IN_ONLY', 'Drivers sign in with their mobile number. Go to the sign-in page and use "Driver? Sign in with your mobile number".');
+  if (role === 'COORDINATOR') throw new AppError(400, 'MOBILE_SIGN_IN_ONLY', 'Coordinators sign in with their email and mobile number. Go to the sign-in page and use "Coordinator? Sign in with email and mobile number".');
   if (role === 'ADMIN' && adminsUseMicrosoft()) throw new AppError(400, 'MICROSOFT_SIGN_IN_ONLY', 'Admins sign in with Microsoft. Go to the sign-in page and use "Sign in with Microsoft".');
   if (!usesPassword(role)) throw new AppError(400, 'MICROSOFT_SIGN_IN_ONLY', 'Employees sign in with Microsoft. Go to the sign-in page and use "Sign in with Microsoft".');
   return doc;

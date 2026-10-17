@@ -8,6 +8,9 @@ const coordinatorSchema = new Schema(
     phone: { type: String, trim: true },
     // Operational scope. A coordinator only sees requests/drivers/vehicles in these offices.
     officeLocations: { type: [String], default: [] },
+    // Sign-in is email + this phone number; repeated failures lock it for a while.
+    phoneLoginFailures: { type: Number, default: 0 },
+    phoneLoginLockedUntil: { type: Date },
     // Set when an admin deletes a coordinator who has history (rides assigned, actions in the
     // audit log): only the name is kept so that history stays readable.
     deletedAt: { type: Date, index: true },

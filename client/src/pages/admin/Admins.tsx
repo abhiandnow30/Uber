@@ -35,7 +35,7 @@ type AdminRow = {
   hasCredentials: boolean;
 };
 
-type Action = { kind: 'suspend' | 'deactivate' | 'reactivate' | 'resend'; admin: AdminRow };
+type Action = { kind: 'suspend' | 'deactivate' | 'reactivate' | 'resend' | 'delete'; admin: AdminRow };
 
 function AddAdminModal({ open, onClose, microsoft }: { open: boolean; onClose: () => void; microsoft: boolean }) {
   const toast = useToast();
@@ -128,13 +128,13 @@ export default function Admins() {
     if (a._id === me?.user.id) return []; // nobody can suspend or deactivate themselves
     switch (a.status) {
       case 'ACTIVE':
-        return onlyActive(a) ? [] : ['suspend', 'deactivate'];
+        return onlyActive(a) ? [] : ['suspend', 'deactivate', 'delete'];
       case 'SUSPENDED':
-        return ['reactivate', 'deactivate'];
+        return ['reactivate', 'deactivate', 'delete'];
       case 'INACTIVE':
-        return ['reactivate'];
+        return ['reactivate', 'delete'];
       case 'INVITED':
-        return microsoft ? ['deactivate'] : ['resend', 'deactivate'];
+        return microsoft ? ['deactivate', 'delete'] : ['resend', 'deactivate', 'delete'];
       default:
         return [];
     }
@@ -146,6 +146,9 @@ export default function Admins() {
     if (kind === 'resend') {
       await post(`/admin/admins/${admin._id}/invitation`);
       toast.success('Invitation email queued', admin.email);
+    } else if (kind === 'delete') {
+      await post(`/admin/admins/${admin._id}/delete`);
+      toast.success(`${admin.name} has been deleted`);
     } else {
       // Inactive admins who never set a password are re-invited instead of reactivated directly.
       const status = kind === 'suspend' ? 'SUSPENDED' : kind === 'deactivate' ? 'INACTIVE' : admin.status === 'INACTIVE' && !admin.hasCredentials ? 'INVITED' : 'ACTIVE';
@@ -156,7 +159,7 @@ export default function Admins() {
     qc.invalidateQueries({ queryKey: ['admin-admins'] });
   };
 
-  const LABELS: Record<Action['kind'], string> = { suspend: 'Suspend', deactivate: 'Deactivate', reactivate: 'Reactivate', resend: 'Resend invite' };
+  const LABELS: Record<Action['kind'], string> = { suspend: 'Suspend', deactivate: 'Deactivate', reactivate: 'Reactivate', resend: 'Resend invite', delete: 'Delete' };
 
   const columns: Column<AdminRow>[] = [
     {
@@ -209,6 +212,7 @@ export default function Admins() {
     deactivate: 'They are signed out everywhere and their access is removed. You can reactivate them later.',
     reactivate: microsoft ? 'They can sign in with Microsoft again.' : 'They can sign in again. If they never set a password, a new invitation email is sent instead.',
     resend: 'A new activation link is emailed. Earlier links stop working.',
+    delete: 'Their admin account is permanently removed and they are signed out everywhere. This cannot be undone.',
   };
 
   return (
@@ -243,7 +247,7 @@ export default function Admins() {
         title={action ? `${LABELS[action.kind]} ${action.admin.name}?` : ''}
         message={action ? messages[action.kind] : ''}
         confirmLabel={action ? LABELS[action.kind] : 'Confirm'}
-        tone={needsReason ? 'danger' : 'primary'}
+        tone={needsReason || action?.kind === 'delete' ? 'danger' : 'primary'}
         reasonLabel={needsReason ? 'Reason' : undefined}
       />
     </>

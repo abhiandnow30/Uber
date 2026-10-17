@@ -16,7 +16,6 @@ type Form = {
   dropLocation: string;
   passengers: string;
   shift: string;
-  officeLocation: string;
   tripType: 'ONE_WAY' | 'ROUND_TRIP';
   returnPickupTime: string;
   notes: string;
@@ -58,14 +57,13 @@ export default function RequestCab() {
     dropLocation: '',
     passengers: '1',
     shift: '',
-    officeLocation: '',
     tripType: 'ONE_WAY',
     returnPickupTime: '',
     notes: '',
   });
 
-  const officeCode = form.officeLocation || (activeOffices.some((o) => o.code === myOffice) ? myOffice : activeOffices[0]?.code ?? '');
-  const office = activeOffices.find((o) => o.code === officeCode);
+  // Cabs are always booked for the employee's own office (that office's coordinators assign them).
+  const office = activeOffices.find((o) => o.code === myOffice);
   const tz = office?.timezone ?? 'Asia/Kolkata';
   const today = todayISO(tz);
   const maxDate = policy ? addDaysISO(today, policy.booking.maxDaysAhead) : undefined;
@@ -138,7 +136,6 @@ export default function RequestCab() {
     if (!e.pickupLocation && !e.dropLocation && form.pickupLocation.trim().toLowerCase() === form.dropLocation.trim().toLowerCase()) e.dropLocation = 'Pickup and drop-off must differ';
     const n = Number(form.passengers);
     if (!Number.isInteger(n) || n < 1 || n > rules.maxPassengers) e.passengers = `Between 1 and ${rules.maxPassengers} passengers`;
-    if (!office) e.officeLocation = 'Choose an office';
     if (form.tripType === 'ROUND_TRIP') {
       if (!/^\d{2}:\d{2}$/.test(form.returnPickupTime)) e.returnPickupTime = 'Choose a return pickup time';
       else if (form.pickupTime && form.returnPickupTime <= form.pickupTime) e.returnPickupTime = 'Must be later than the outbound pickup time';
@@ -153,6 +150,10 @@ export default function RequestCab() {
     const v = validate();
     setErrors(v);
     if (Object.values(v).some(Boolean)) return;
+    if (!office) {
+      setFormError({ title: 'Your office is not accepting cab requests', message: 'Please contact your administrator.' });
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await post<CreateResult>('/me/bookings', {
@@ -164,7 +165,7 @@ export default function RequestCab() {
         tripType: form.tripType,
         ...(form.tripType === 'ROUND_TRIP' ? { returnPickupTime: form.returnPickupTime } : {}),
         shift: form.shift || undefined,
-        officeLocation: officeCode,
+        officeLocation: myOffice,
         notes: form.notes.trim(),
         clientRequestId: requestId.current,
       });
@@ -263,15 +264,9 @@ export default function RequestCab() {
             )}
             <Input label="Pickup location" required maxLength={300} autoComplete="street-address" value={form.pickupLocation} onChange={(e) => set('pickupLocation', e.target.value)} error={errors.pickupLocation} placeholder="e.g. Present address or landmark" />
             <Input label="Drop-off location" required maxLength={300} value={form.dropLocation} onChange={(e) => set('dropLocation', e.target.value)} error={errors.dropLocation} placeholder="e.g. Office main gate" />
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Select label="Office" className="sm:col-span-2" required value={officeCode} onChange={(e) => set('officeLocation', e.target.value)} error={errors.officeLocation}>
-                {activeOffices.map((o) => (
-                  <option key={o.code} value={o.code}>
-                    {o.name} ({o.code})
-                  </option>
-                ))}
-              </Select>
-            </div>
+            <p className="text-sm text-slate-600">
+              Office: <span className="font-medium text-slate-900">{office ? `${office.name} (${office.code})` : myOffice || '—'}</span>
+            </p>
             <div className="grid gap-4 sm:grid-cols-2">
               <Input
                 label="Passengers"

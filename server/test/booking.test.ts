@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { CabRequest } from '../src/models/booking.js';
 import { Policy } from '../src/models/Policy.js';
+import { findOfficeMismatches } from '../src/scripts/check-office-mismatch.js';
 import { getPolicy, invalidatePolicyCache } from '../src/services/policy.service.js';
 import { bookingInput, futureDate, makeAdmin, makeCoordinator, makeEmployee } from './helpers.js';
 
@@ -110,6 +111,28 @@ describe('coordinator booking view', () => {
     expect(other.body.total).toBe(0);
     await blrCoord.client.get(`/api/ops/bookings/${res.body.booking._id}`).expect(403);
     await blrCoord.client.get('/api/ops/bookings?officeLocation=HYD').expect(403);
+  });
+
+  it('an employee can only book for their own office, so other offices never handle them', async () => {
+    const blrCoord = await makeCoordinator(['BLR']);
+    const emp = await makeEmployee({ office: 'HYD' });
+    const wrong = await emp.client!.post('/api/me/bookings', bookingInput({ officeLocation: 'BLR' }));
+    expect(wrong.status).toBe(422);
+    expect(wrong.body.error.code).toBe('OFFICE_MISMATCH');
+    const ok = await emp.client!.post('/api/me/bookings', bookingInput({ clientRequestId: crypto.randomUUID() })).expect(201);
+    expect(ok.body.booking.officeLocation).toBe('HYD');
+    expect((await blrCoord.client.get('/api/ops/bookings')).body.total).toBe(0);
+    await blrCoord.client.post(`/api/ops/bookings/${ok.body.booking._id}/assign`, { driverId: ok.body.booking._id, vehicleId: ok.body.booking._id }).expect(403);
+  });
+
+  it('the pre-deploy check finds bookings whose office differs from the employee office', async () => {
+    const emp = await makeEmployee({ office: 'HYD' });
+    const res = await emp.client!.post('/api/me/bookings', bookingInput()).expect(201);
+    expect(await findOfficeMismatches()).toHaveLength(0);
+    await CabRequest.updateOne({ _id: res.body.booking._id }, { $set: { officeLocation: 'BLR' } });
+    const rows = await findOfficeMismatches();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ reference: res.body.booking.reference, bookingOffice: 'BLR', employeeOffice: 'HYD' });
   });
 
   it('supports filtering, search and pagination', async () => {

@@ -9,7 +9,7 @@ import { Employee } from '../models/Employee.js';
 import { AuditLog, EmailOutbox } from '../models/system.js';
 import { User } from '../models/User.js';
 import { setAccountStatus } from '../services/account.service.js';
-import { adminSchema, createAdmin, getAdminUserId, listAdmins } from '../services/admin.service.js';
+import { adminSchema, createAdmin, deleteAdmin, getAdminUserId, listAdmins } from '../services/admin.service.js';
 import { audit } from '../services/audit.service.js';
 import { issueActivation } from '../services/auth.service.js';
 import { coordinatorSchema, createCoordinator, deleteCoordinator, getCoordinator, listCoordinators, updateCoordinator } from '../services/coordinator.service.js';
@@ -122,6 +122,9 @@ adminRouter.post('/admins/:id/status', async (req, res) => {
   const input = body(statusSchema, req);
   res.json({ status: (await setAccountStatus(actorFromRequest(req), userId, input.status, input.reason)).status });
 });
+adminRouter.post('/admins/:id/delete', async (req, res) => {
+  res.json(await deleteAdmin(actorFromRequest(req), objectId(req.params.id, 'Admin')));
+});
 adminRouter.post('/admins/:id/invitation', async (req, res) => {
   res.json(await resendForUser(req, await getAdminUserId(objectId(req.params.id, 'Admin'))));
 });
@@ -149,11 +152,6 @@ adminRouter.post('/coordinators/:id/status', async (req, res) => {
   if (!c) throw notFound('Coordinator');
   const input = body(statusSchema, req);
   res.json({ status: (await setAccountStatus(actorFromRequest(req), String(c.user), input.status, input.reason)).status });
-});
-adminRouter.post('/coordinators/:id/invitation', async (req, res) => {
-  const c = await Coordinator.findOne({ _id: objectId(req.params.id, 'Coordinator'), deletedAt: null }).lean();
-  if (!c) throw notFound('Coordinator');
-  res.json(await resendForUser(req, String(c.user)));
 });
 
 // Driver login accounts (admin-only account status / invitation management)

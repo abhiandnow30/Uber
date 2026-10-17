@@ -7,7 +7,7 @@ import { User } from '../models/User.js';
 import { badRequest, conflict, notFound } from '../utils/errors.js';
 import { escapeRegex, paged, type Pagination } from '../utils/listing.js';
 import { audit, type Actor } from './audit.service.js';
-import { issueActivation, normalizeEmail } from './auth.service.js';
+import { normalizeEmail } from './auth.service.js';
 import { emailDomainAllowed, PHONE_RE } from './employee.service.js';
 import { getPolicy } from './policy.service.js';
 import { revokeAllSessions } from './session.service.js';
@@ -35,7 +35,7 @@ export async function createCoordinator(actor: Actor, input: z.infer<typeof coor
       { session },
     );
     const [coord] = await Coordinator.create([{ ...input, user: user._id }], { session });
-    await issueActivation(user, actor, session);
+    // No email: they activate on their first sign-in with this email and phone number.
     await audit(actor, 'COORDINATOR_CREATED', 'Coordinator', coord._id, `Coordinator ${input.email} created`, { offices: input.officeLocations }, session);
     return coord;
   });

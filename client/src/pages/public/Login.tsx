@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Car } from 'lucide-react';
+import { Car, UserCog } from 'lucide-react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Input } from '../../components/ui';
 import { ApiError } from '../../lib/api';
@@ -13,6 +13,7 @@ const SSO_ERRORS: Record<string, string> = {
   sso_failed: 'Microsoft sign-in failed. Please try again or use your password.',
   sso_disabled: 'Microsoft sign-in is not configured for this portal.',
   driver_mobile_only: 'Drivers sign in with their mobile number. Use "Driver? Sign in with your mobile number" below.',
+  coordinator_own_sign_in: 'Coordinators sign in with their email and mobile number. Use "Coordinator? Sign in with email and mobile number" below.',
 };
 
 export default function Login() {
@@ -81,11 +82,17 @@ export default function Login() {
           {sso.employeesMicrosoftOnly && <p className="mt-2 text-center text-xs text-slate-500">Employees always sign in with Microsoft.</p>}
           <div className="my-5 flex items-center gap-3 text-xs uppercase text-slate-400">
             <span className="h-px flex-1 bg-slate-200" />
-            {sso.employeesMicrosoftOnly ? 'Admins and coordinators' : 'or'}
+            {sso.employeesMicrosoftOnly ? 'Admins' : 'or'}
             <span className="h-px flex-1 bg-slate-200" />
           </div>
         </>
       )}
+      <Link
+        to="/coordinator-login"
+        className="mb-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white text-sm font-medium hover:bg-slate-50"
+      >
+        <UserCog className="h-4 w-4" aria-hidden /> Coordinator? Sign in with email and mobile number
+      </Link>
       <Link
         to="/driver-login"
         className="mb-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white text-sm font-medium hover:bg-slate-50"

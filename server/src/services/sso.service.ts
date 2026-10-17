@@ -58,7 +58,7 @@ export async function buildLoginUrl() {
 export type SsoOutcome =
   | { ok: true; token: string; csrfToken: string; expiresAt: Date }
   | { ok: false; reason: 'register'; ticket: string }
-  | { ok: false; reason: 'not_registered' | 'inactive' | 'invalid' | 'driver_mobile_only' };
+  | { ok: false; reason: 'not_registered' | 'inactive' | 'invalid' | 'driver_mobile_only' | 'coordinator_own_sign_in' };
 
 // ---------------------------------------------------------------------------
 // Self-registration ticket: proof that Microsoft verified this identity, carried
@@ -119,6 +119,7 @@ export async function completeLogin(params: { code: string; state: string; cooki
   }
   // Drivers sign in only with their mobile number and vehicle number, never with Microsoft.
   if (user.role === 'DRIVER') return { ok: false, reason: 'driver_mobile_only' };
+  if (user.role === 'COORDINATOR') return { ok: false, reason: 'coordinator_own_sign_in' };
   if (user.status === 'INVITED') {
     // The admin already approved this record and Microsoft proved the identity:
     // first SSO sign-in completes activation.

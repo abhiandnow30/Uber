@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { withTransaction } from '../db.js';
+import { AuthToken, Notification, Session } from '../models/system.js';
 import { User } from '../models/User.js';
-import { conflict, notFound } from '../utils/errors.js';
+import { badRequest, conflict, notFound } from '../utils/errors.js';
 import { escapeRegex, paged, type Pagination } from '../utils/listing.js';
 import { audit, type Actor } from './audit.service.js';
 import { adminsUseMicrosoft, issueActivation, normalizeEmail } from './auth.service.js';
 import { emailDomainAllowed, PHONE_RE } from './employee.service.js';
+import { revokeAllSessions } from './session.service.js';
 
 export const adminSchema = z.object({
   fullName: z.string().trim().min(2, 'Full name is required').max(100),
@@ -57,6 +59,28 @@ export async function createAdmin(actor: Actor, input: z.infer<typeof adminSchem
     await audit(actor, 'ADMIN_CREATED', 'User', user._id, `Admin ${input.email} created`, undefined, session);
     return { _id: user._id, name: user.name, email: user.email, phone: user.phone, status: user.status };
   });
+}
+
+/**
+ * Permanently removes an admin account. Audit entries keep the actor's email, so history stays readable.
+ * Nobody can delete themselves, and the last active admin can never be removed.
+ */
+export async function deleteAdmin(actor: Actor, id: string) {
+  const admin = await User.findOne({ _id: id, role: 'ADMIN' }).lean();
+  if (!admin) throw notFound('Admin');
+  if (String(admin._id) === String(actor.id)) throw badRequest('You cannot delete your own account');
+  if (admin.status === 'ACTIVE' && (await User.countDocuments({ role: 'ADMIN', status: 'ACTIVE' })) <= 1) {
+    throw badRequest('The only active admin cannot be deleted');
+  }
+  await withTransaction(async ({ session }) => {
+    await User.deleteOne({ _id: admin._id }, { session });
+    await AuthToken.deleteMany({ user: admin._id }, { session });
+    await Notification.deleteMany({ user: admin._id }, { session });
+    await audit(actor, 'ADMIN_DELETED', 'User', admin._id, `Admin ${admin.name} (${admin.email}) deleted`, undefined, session);
+  });
+  await revokeAllSessions(admin._id, 'ADMIN_DELETED');
+  await Session.deleteMany({ user: admin._id });
+  return { deleted: true };
 }
 
 export async function getAdminUserId(id: string) {

@@ -30,7 +30,7 @@ export async function setAccountStatus(actor: Actor, userId: string, to: Account
     if (from === 'INVITED' && to === 'ACTIVE') {
       throw new AppError(409, 'INVALID_TRANSITION', 'Invited accounts become active only when the user completes activation');
     }
-    if (to === 'ACTIVE' && from === 'INACTIVE' && user.role !== 'DRIVER' && !user.passwordHash && !user.entraOid) {
+    if (to === 'ACTIVE' && from === 'INACTIVE' && user.role !== 'DRIVER' && user.role !== 'COORDINATOR' && !user.passwordHash && !user.entraOid) {
       throw new AppError(409, 'INVALID_TRANSITION', 'This account was never activated. Re-send an invitation instead.');
     }
     if ((to === 'INACTIVE' || to === 'SUSPENDED') && !reason?.trim()) throw badRequest('A reason is required');
@@ -48,7 +48,7 @@ export async function setAccountStatus(actor: Actor, userId: string, to: Account
     if (!updated) throw new AppError(409, 'CONCURRENT_UPDATE', 'Account was modified concurrently, please retry');
 
     const signsInWithMicrosoft = (updated.role === 'EMPLOYEE' && employeesUseMicrosoftOnly()) || (updated.role === 'ADMIN' && adminsUseMicrosoft());
-    if (to === 'INVITED' && updated.role !== 'DRIVER' && !signsInWithMicrosoft) {
+    if (to === 'INVITED' && updated.role !== 'DRIVER' && updated.role !== 'COORDINATOR' && !signsInWithMicrosoft) {
       await issueActivation(updated, actor, session);
     }
     if (to === 'INACTIVE' || to === 'SUSPENDED') {

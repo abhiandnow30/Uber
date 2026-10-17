@@ -3,7 +3,7 @@ import { AuditLog, Session } from '../src/models/system.js';
 import { User } from '../src/models/User.js';
 import { CabAssignment } from '../src/models/booking.js';
 import { Coordinator } from '../src/models/Coordinator.js';
-import { assign, drainOutbox, fakeEmail, makeAdmin, makeCoordinator, makeUser, scenario } from './helpers.js';
+import { anonymous, assign, drainOutbox, fakeEmail, makeAdmin, makeCoordinator, makeUser, PASSWORD, scenario } from './helpers.js';
 
 describe('admin management', () => {
   it('admins see every admin with counts, can search, and add a new admin who is invited by email', async () => {
@@ -137,5 +137,43 @@ describe('deleting a coordinator', () => {
     const target = await makeCoordinator(['HYD']);
     const doc = await Coordinator.findOne({ user: target.user._id }).lean();
     expect((await other.client.post(`/api/admin/coordinators/${doc!._id}/delete`, {})).status).toBe(403);
+  });
+});
+
+describe('coordinator sign-in with email and mobile number', () => {
+  it('a newly added coordinator signs in with email + mobile; first sign-in activates them; no email is sent', async () => {
+    const { client: admin } = await makeAdmin();
+    const c = await admin.post('/api/admin/coordinators', { fullName: 'Vendor Coord', email: 'vendor.coord@gmail.com', phone: '+91 98480 12345', officeLocations: ['HYD'] }).expect(201);
+    await drainOutbox();
+    expect(fakeEmail.to('vendor.coord@gmail.com')).toHaveLength(0);
+    expect((await User.findById(c.body.user))!.status).toBe('INVITED');
+
+    const client = anonymous();
+    await client.post('/api/auth/coordinator-login', { email: 'Vendor.Coord@gmail.com', phone: '9848012345' }).expect(200);
+    expect((await client.get('/api/auth/me')).body.user.role).toBe('COORDINATOR');
+    expect((await User.findById(c.body.user))!.status).toBe('ACTIVE');
+    expect((await client.get('/api/ops/bookings')).status).toBe(200);
+  });
+
+  it('wrong details all look the same; repeated failures lock; no password sign-in for coordinators', async () => {
+    const coord = await makeCoordinator(['HYD'], 'lock.me@gmail.com');
+    const wrongPhone = await anonymous().post('/api/auth/coordinator-login', { email: 'lock.me@gmail.com', phone: '9000000000' });
+    const unknown = await anonymous().post('/api/auth/coordinator-login', { email: 'nobody@gmail.com', phone: coord.phone });
+    expect(wrongPhone.status).toBe(401);
+    expect(unknown.status).toBe(401);
+    expect(wrongPhone.body.error.message).toBe(unknown.body.error.message);
+    for (let i = 0; i < 4; i++) await anonymous().post('/api/auth/coordinator-login', { email: 'lock.me@gmail.com', phone: '9000000000' });
+    expect((await anonymous().post('/api/auth/coordinator-login', { email: 'lock.me@gmail.com', phone: coord.phone })).status).toBe(429);
+
+    const pw = await anonymous().post('/api/auth/login', { email: 'lock.me@gmail.com', password: PASSWORD });
+    expect(pw.status).toBe(401);
+  });
+
+  it('a deleted coordinator can no longer sign in', async () => {
+    const { client: admin } = await makeAdmin();
+    const coord = await makeCoordinator(['HYD'], 'leaving@gmail.com');
+    const doc = await Coordinator.findOne({ user: coord.user._id }).lean();
+    await admin.post(`/api/admin/coordinators/${doc!._id}/delete`, {}).expect(200);
+    expect((await anonymous().post('/api/auth/coordinator-login', { email: 'leaving@gmail.com', phone: coord.phone })).status).toBe(401);
   });
 });

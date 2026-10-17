@@ -95,6 +95,20 @@ async function login(browser, email, who, viewport) {
   return page;
 }
 
+/** Coordinators sign in with their email and the mobile number an admin registered. */
+async function coordinatorLogin(browser, email, phone) {
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await page.setViewport({ width: 1366, height: 900 });
+  watch(page, 'coordinator');
+  await page.goto(`${BASE}/coordinator-login`, { waitUntil: 'networkidle0' });
+  await fill(page, 'Email', email);
+  await fill(page, 'Mobile number', phone);
+  await click(page, 'Sign in');
+  await page.waitForFunction(() => !location.pathname.startsWith('/coordinator-login'), { timeout: 15000 });
+  return page;
+}
+
 /** Drivers sign in with their mobile number and the last 4 characters of their vehicle number. */
 async function driverLogin(browser, phone, vehicleLast4, viewport) {
   const ctx = await browser.createBrowserContext();
@@ -135,7 +149,7 @@ try {
   console.log('✓ employee created booking', reference, bookingId);
 
   // 2. Coordinator assigns driver + vehicle
-  const coord = await login(browser, 'coordinator@example.com', 'coordinator');
+  const coord = await coordinatorLogin(browser, 'coordinator@example.com', '9000000001');
   await shot(coord, 'coordinator-dashboard');
   await coord.goto(`${BASE}/ops/bookings?date=${travelDate}`, { waitUntil: 'networkidle0' });
   await waitText(coord, 'Asha Rao');

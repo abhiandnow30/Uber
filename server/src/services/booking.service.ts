@@ -33,6 +33,7 @@ export const createBookingSchema = z.object({
   tripType: z.enum(['ONE_WAY', 'ROUND_TRIP']).default('ONE_WAY'),
   returnPickupTime: z.string().regex(TIME_RE).optional(),
   shift: z.string().trim().toUpperCase().max(20).optional().or(z.literal('')),
+  // Optional; must match the employee's own office when sent.
   officeLocation: z.string().trim().toUpperCase().max(20).optional(),
   notes: z.string().trim().max(500).optional().default(''),
   clientRequestId: z.string().uuid('clientRequestId must be a UUID'),
@@ -76,9 +77,12 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
   if (existing) return { booking: existing, duplicate: true };
 
   const policy = await getPolicy();
-  const officeCode = input.officeLocation || employee.officeLocation;
-  const office = policy.officeLocations.find((o) => o.code === officeCode && o.active);
-  if (!office) throw badRequest('Select a valid office location');
+  // Bookings always belong to the employee's own office, so only that office's coordinators handle them.
+  if (input.officeLocation && input.officeLocation !== employee.officeLocation) {
+    throw new AppError(422, 'OFFICE_MISMATCH', `Cabs can only be booked for your own office (${employee.officeLocation}). Ask your administrator if your office has changed.`);
+  }
+  const office = policy.officeLocations.find((o) => o.code === employee.officeLocation && o.active);
+  if (!office) throw new AppError(422, 'OFFICE_INACTIVE', `Your office (${employee.officeLocation}) is not accepting cab requests. Please contact your administrator.`);
   const shift = input.shift ? policy.shifts.find((s) => s.code === input.shift && s.active) : undefined;
   if (input.shift && !shift) throw badRequest('Select a valid shift');
   if (!shift && policy.booking?.requireShift) throw validationError('Select your shift', { fields: { shift: 'Select your shift' } });

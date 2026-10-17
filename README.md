@@ -5,7 +5,7 @@ A web application for corporate employee transport. Employees request cabs, coor
 | Role | What they do |
 |---|---|
 | **Admin** | Employee onboarding (manual or Microsoft self-registration), coordinators, other admins (add, suspend, deactivate, reactivate; never yourself or the last active admin), driver document verification, booking policy, reports, email-delivery monitoring, audit log. Admins can also use every coordinator screen across all offices. |
-| **Coordinator** | Drivers, vehicles and driver↔vehicle links, the daily request queue, assignment/reassignment/cancellation, in-app alerts about rides that need attention, and audited support actions for stuck trips (start without PIN, complete on the driver's behalf, record a no-show). Limited to the offices an admin assigns and, optionally, to specific shifts. |
+| **Coordinator** | Signs in with the email and mobile number an admin registered. Drivers, vehicles and driver↔vehicle links, the daily request queue, assignment/reassignment/cancellation, in-app alerts about rides that need attention, and audited support actions for stuck trips (start without PIN, complete on the driver's behalf, record a no-show). Limited to the offices an admin assigns and, optionally, to specific shifts. |
 | **Employee** | Requests cabs, sees assignment details and the ride-start PIN, cancels within policy, receives Outlook emails and in-app notifications. |
 | **Driver** | Signs in on their phone with the mobile number the coordinator registered and the last 4 characters of their linked vehicle's number (no email or password). Sees assigned rides, acknowledges or declines them, marks en route and arrived, enters the employee's PIN to start, completes the trip. |
 
@@ -36,7 +36,7 @@ All seed accounts use the password `Password123!`. The seed script refuses to ru
 | Role | Email |
 |---|---|
 | Admin | admin@example.com |
-| Coordinator (HYD, BLR) | coordinator@example.com |
+| Coordinator (HYD, BLR) | *Coordinator sign-in*: coordinator@example.com + mobile 9000000001 |
 | Employee (EMP1001, HYD) | employee@example.com |
 | Driver (DRV001, vehicle TS09AB1234) | *Driver sign-in*: mobile 9000020001, vehicle 1234 |
 | Driver (DRV002, vehicle TS09CD5678) | *Driver sign-in*: mobile 9000020002, vehicle 5678 |
@@ -70,6 +70,7 @@ With `EMAIL_MODE=mock` nothing is sent. Each email is written as an HTML file to
 - **State machines** for accounts and bookings live in `server/src/domain.ts`. Every status change is a conditional update against the expected previous state, and each one writes to the trip status history. Clients can't set a status directly.
 - **Notifications** use a transactional outbox. The email job is written in the same transaction as the business change. A worker sends it with a lease, exponential backoff and an idempotency key, and records every attempt. A message is marked `ACCEPTED` when Microsoft Graph returns 202. That is **not** treated as delivery; `DELIVERED` is reserved for real delivery evidence, which isn't integrated yet. Email failures can never roll back or duplicate an assignment. In-app notifications are persisted, pushed over Socket.IO, and re-synced from the API when a client reconnects.
 - **Microsoft self-registration**: a colleague who signs in with Microsoft but isn't registered yet gets a signed, 30-minute registration ticket (httpOnly cookie, HMAC with `TOKEN_HMAC_KEY`) and completes a form with employee ID, name, phone, office, route and home address. The email always comes from the verified Microsoft identity, never the form. The account is created **active** and bound to the Microsoft object id in one transaction. Emails outside `ALLOWED_EMAIL_DOMAINS`, or already used by another account, are refused.
+- **Coordinator sign-in**: coordinators are often outside the company, so they sign in with the email and mobile number an admin registered (no password, invitation or Microsoft account). Neither is secret, so the same safeguards as driver sign-in apply: identical messages for every mismatch, a 15-minute lock after 5 wrong tries, and deleting or deactivating the coordinator stops sign-in at once.
 - **Driver sign-in** uses the mobile number the coordinator registered plus the last 4 characters of the vehicle currently linked to the driver. Neither is secret, so the risk is accepted deliberately: mismatches all get the same message, 5 wrong tries lock that number for 15 minutes, a number can belong to only one active driver, and unlinking the vehicle or deactivating the driver stops sign-in at once. Drivers have no password, invitation or reset email.
 - **Microsoft client secret expiry**: Azure client secrets expire, usually after 6, 12 or 24 months. Check the "Expires" date under **Certificates & secrets** in the Azure app and set a reminder. When it expires, every employee's Microsoft sign-in stops working until you add a new secret.
 - **Deactivating** an employee or driver with live or upcoming rides flags those rides and notifies the office's coordinators for a human decision. Rides are never deleted or interrupted silently.

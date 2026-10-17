@@ -165,9 +165,9 @@ export default function Drivers() {
     { key: 'verif', header: 'Verification', render: (d) => <StatusBadge status={d.verificationStatus} /> },
     { key: 'emp', header: 'Employment', render: (d) => <StatusBadge status={d.employmentStatus} /> },
     { key: 'avail', header: 'Availability', sortKey: 'availability', render: (d) => <StatusBadge status={d.availability} /> },
-    { key: 'duty', header: 'On duty', render: (d) => (d.onDuty ? <span className="text-emerald-700">Yes</span> : <span className="text-slate-400">No</span>) },
+    { key: 'duty', header: 'On duty', className: 'hidden 2xl:table-cell', render: (d) => (d.onDuty ? <span className="text-emerald-700">Yes</span> : <span className="text-slate-400">No</span>) },
     { key: 'vehicle', header: 'Current vehicle', render: (d) => (d.currentVehicle ? <span className="whitespace-nowrap">{d.currentVehicle.registrationNumber}</span> : <span className="text-slate-400">—</span>) },
-    { key: 'active', header: 'Active rides', render: (d) => d.activeAssignments ?? 0, className: 'text-center' },
+    { key: 'active', header: 'Active rides', render: (d) => d.activeAssignments ?? 0, className: 'hidden text-center 2xl:table-cell' },
     { key: 'login', header: 'Login', render: (d) => (d.user ? <StatusBadge status={d.user.status} /> : <span className="text-xs text-slate-400">No login</span>) },
   ];
 

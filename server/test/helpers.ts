@@ -121,10 +121,20 @@ export async function makeAdmin(email = 'admin@test.com') {
   return { user, client: await login(email) };
 }
 
+/** Coordinators sign in with their email and the mobile number an admin registered. */
+export async function coordinatorLogin(email: string, phone: string): Promise<Client> {
+  const agent = request.agent(app);
+  const res = await agent.post('/api/auth/coordinator-login').set('X-Requested-With', 'XMLHttpRequest').send({ email, phone });
+  if (res.status !== 200) throw new Error(`Coordinator sign-in failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
+  return wrap(agent, res.body.csrfToken);
+}
+
+let coordPhoneSeq = 0;
 export async function makeCoordinator(offices = ['HYD'], email = `coord-${uniq()}@test.com`) {
   const user = await makeUser('COORDINATOR', email);
-  await Coordinator.create({ user: user._id, fullName: 'Coord', email, officeLocations: offices });
-  return { user, client: await login(email) };
+  const phone = `8${String(process.pid % 10000).padStart(4, '0')}${String(++coordPhoneSeq).padStart(5, '0')}`;
+  await Coordinator.create({ user: user._id, fullName: 'Coord', email, phone, officeLocations: offices });
+  return { user, phone, client: await coordinatorLogin(email, phone) };
 }
 
 export async function makeEmployee(opts: { office?: string; email?: string; employeeId?: string; status?: string } = {}) {

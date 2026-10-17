@@ -121,8 +121,8 @@ export function Checkbox({ label, className, ...rest }: { label: ReactNode } & I
   const id = useId();
   return (
     <div className={cn('flex items-start gap-2', className)}>
-      <input id={id} type="checkbox" className="mt-0.5 h-4 w-4 rounded-sm border-slate-300" {...rest} />
-      <label htmlFor={id} className="text-sm text-slate-700">
+      <input id={id} type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 rounded-sm border-slate-300 lg:h-4 lg:w-4" {...rest} />
+      <label htmlFor={id} className="py-0.5 text-sm text-slate-700">
         {label}
       </label>
     </div>
@@ -211,7 +211,7 @@ export function DescriptionList({ items, columns = 2 }: { items: Array<[string, 
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: Array<{ value: T; label: ReactNode }>; value: T; onChange: (v: T) => void }) {
   return (
-    <div role="tablist" className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+    <div role="tablist" className="mb-4 flex flex-wrap gap-x-1 border-b border-slate-200">
       {tabs.map((t) => (
         <button
           key={t.value}
@@ -385,16 +385,16 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: {
   const sizes = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} className={cn('flex max-h-[92vh] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl', sizes[size])}>
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <h2 id={titleId} className="text-lg font-semibold">
+      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} className={cn('flex max-h-[92vh] w-full min-w-0 max-w-full flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl', sizes[size])}>
+        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <h2 id={titleId} className="min-w-0 break-words text-lg font-semibold">
             {title}
           </h2>
-          <button data-close onClick={onClose} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">
+          <button data-close onClick={onClose} className="shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="overflow-y-auto px-5 py-4">{children}</div>
+        <div className="min-w-0 overflow-y-auto overflow-x-hidden px-5 py-4">{children}</div>
         {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-3">{footer}</div>}
       </div>
     </div>
@@ -486,6 +486,12 @@ export type Column<T> = {
   render: (row: T) => ReactNode;
   sortKey?: string;
   className?: string;
+  /** Label in the phone/tablet card layout; defaults to the header when it is plain text. */
+  cardLabel?: string;
+  /** Leave this column out of the phone/tablet card layout. */
+  hideInCard?: boolean;
+  /** Give this column a full row in the card layout (long text such as addresses). */
+  cardWide?: boolean;
 };
 
 export function DataTable<T>({
@@ -515,7 +521,9 @@ export function DataTable<T>({
   const sortField = sort?.replace(/^-/, '');
   const desc = sort?.startsWith('-');
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+    <>
+      <CardList columns={columns} rows={rows} rowKey={rowKey} loading={loading} empty={empty} sort={sort} onSort={onSort} onRowClick={onRowClick} />
+      <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block">
       <table className="min-w-full divide-y divide-slate-200 text-sm">
         <thead className="bg-slate-50">
           <tr>
@@ -563,6 +571,96 @@ export function DataTable<T>({
           )}
         </tbody>
       </table>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Phone / tablet layout of DataTable (below the lg breakpoint): one card per row, so wide
+ * tables never need sideways scrolling. The first column is the card title; the others are
+ * label/value pairs, and a column without a text header (e.g. actions) sits at the bottom.
+ */
+function CardList<T>({
+  columns,
+  rows,
+  rowKey,
+  loading,
+  empty,
+  sort,
+  onSort,
+  onRowClick,
+}: {
+  columns: Column<T>[];
+  rows: T[] | undefined;
+  rowKey: (row: T) => string;
+  loading?: boolean;
+  empty?: ReactNode;
+  sort?: string;
+  onSort?: (sort: string) => void;
+  onRowClick?: (row: T) => void;
+}) {
+  const visible = columns.filter((c) => !c.hideInCard);
+  const label = (c: Column<T>) => c.cardLabel ?? (typeof c.header === 'string' ? c.header : '');
+  const [title, ...rest] = visible;
+  const fields = rest.filter((c) => label(c));
+  const footer = rest.filter((c) => !label(c));
+  const sortable = onSort ? columns.filter((c) => c.sortKey) : [];
+  return (
+    <div className="lg:hidden">
+      {sortable.length > 0 && (
+        <label className="mb-3 flex items-center justify-end gap-2 text-sm text-slate-600">
+          Sort by
+          <select className="h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm" value={sort ?? ''} onChange={(e) => onSort!(e.target.value)}>
+            {sortable.flatMap((c) => [
+              <option key={c.sortKey} value={c.sortKey}>
+                {label(c) || c.sortKey} ↑
+              </option>,
+              <option key={`-${c.sortKey}`} value={`-${c.sortKey}`}>
+                {label(c) || c.sortKey} ↓
+              </option>,
+            ])}
+          </select>
+        </label>
+      )}
+      {loading ? (
+        <div className="rounded-xl border border-slate-200 bg-white">
+          <Spinner />
+        </div>
+      ) : !rows?.length ? (
+        <div className="rounded-xl border border-slate-200 bg-white">{empty ?? <EmptyState title="Nothing here yet" />}</div>
+      ) : (
+        <ul className="space-y-3">
+          {rows.map((row) => (
+            <li
+              key={rowKey(row)}
+              className={cn('rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700', onRowClick && 'cursor-pointer active:bg-slate-50')}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              onKeyDown={onRowClick ? (e) => e.key === 'Enter' && onRowClick(row) : undefined}
+              tabIndex={onRowClick ? 0 : undefined}
+            >
+              {title && <div className="mb-2 font-medium text-slate-900">{title.render(row)}</div>}
+              {fields.length > 0 && (
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                  {fields.map((c) => (
+                    <div key={c.key} className={cn('min-w-0', c.cardWide && 'col-span-2 sm:col-span-3')}>
+                      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label(c)}</dt>
+                      <dd className="mt-0.5 break-words [&_*]:max-w-full">{c.render(row)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+              {footer.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                  {footer.map((c) => (
+                    <div key={c.key}>{c.render(row)}</div>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

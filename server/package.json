@@ -16,6 +16,7 @@
     "seed:memdb": "cross-env MONGODB_URI=memory tsx src/scripts/seed.ts",
     "test:ui": "node e2e/ui-smoke.mjs",
     "create-admin": "tsx src/scripts/create-admin.ts",
+    "check-office-mismatch": "tsx src/scripts/check-office-mismatch.ts",
     "test-mail": "tsx src/scripts/test-mail.ts"
   },
   "dependencies": {

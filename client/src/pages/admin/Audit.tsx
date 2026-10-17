@@ -106,7 +106,52 @@ export default function Audit() {
       {error ? (
         <ErrorState error={error} onRetry={refetch} />
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white" aria-busy={isFetching}>
+        <>
+        {/* Phones and tablets: one card per entry instead of a wide table. */}
+        <div className="lg:hidden" aria-busy={isFetching}>
+          {isLoading ? (
+            <div className="rounded-xl border border-slate-200 bg-white">
+              <Spinner />
+            </div>
+          ) : !data?.items.length ? (
+            <div className="rounded-xl border border-slate-200 bg-white">
+              <EmptyState title={hasFilters ? 'No entries match these filters' : 'No audit entries yet'} />
+            </div>
+          ) : (
+            <ul className="space-y-3">
+              {data.items.map((a) => {
+                const expanded = !!open[a._id];
+                return (
+                  <li key={a._id} className="rounded-xl border border-slate-200 bg-white p-4 text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="break-all font-mono text-xs font-medium text-slate-900">{a.action}</span>
+                      <span className="whitespace-nowrap text-xs text-slate-500">{fmtDateTime(a.createdAt)}</span>
+                    </div>
+                    <p className="mt-1 text-slate-700">{a.summary ?? '—'}</p>
+                    <p className="mt-2 break-words text-xs text-slate-500">
+                      {a.actorEmail ?? 'system'}
+                      {a.actorRole ? ` · ${humanize(a.actorRole)}` : ''} · {a.entityType}
+                    </p>
+                    <button
+                      className="mt-2 inline-flex min-h-10 items-center gap-1 text-sm font-medium text-indigo-600"
+                      aria-expanded={expanded}
+                      onClick={() => setOpen((o) => ({ ...o, [a._id]: !expanded }))}
+                    >
+                      {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      {expanded ? 'Hide details' : 'Show details'}
+                    </button>
+                    {expanded && (
+                      <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
+                        {JSON.stringify({ details: a.details ?? null, entityId: a.entityId, ip: a.ip, userAgent: a.userAgent }, null, 2)}
+                      </pre>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block" aria-busy={isFetching}>
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
@@ -177,6 +222,7 @@ export default function Audit() {
             </tbody>
           </table>
         </div>
+        </>
       )}
       {data && <Pagination page={data.page} totalPages={data.totalPages} total={data.total} onPage={list.setPage} />}
     </>

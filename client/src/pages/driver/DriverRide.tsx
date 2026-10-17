@@ -429,7 +429,7 @@ export default function DriverRide() {
                 <span key="e">
                   {ride.employee.name}
                   {ride.employee.phone && isActive && (
-                    <a href={`tel:${ride.employee.phone}`} className="mt-1 flex items-center gap-1.5 text-base font-medium text-indigo-700 underline">
+                    <a href={`tel:${ride.employee.phone}`} className="mt-1 flex min-h-11 items-center gap-1.5 text-base font-medium text-indigo-700 underline">
                       <Phone className="h-4 w-4" aria-hidden /> {ride.employee.phone}
                     </a>
                   )}

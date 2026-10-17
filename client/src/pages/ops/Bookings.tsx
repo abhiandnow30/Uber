@@ -24,7 +24,7 @@ import {
 } from '../../components/ui';
 import { ApiError, errorMessage, get, post, qs, type Paged } from '../../lib/api';
 import { usePaged } from '../../lib/hooks';
-import { fmtDateTime, fmtTravelDate, humanize, todayISO, uuid } from '../../lib/format';
+import { fmtTravelDate, humanize, todayISO, uuid } from '../../lib/format';
 import { DayPicker, OfficeSelect, useOpsOffices } from './OpsDashboard';
 
 // ---------------------------------------------------------------------------
@@ -438,16 +438,17 @@ export function AssignModal({ open, onClose, booking, mode = 'assign' }: { open:
 // ---------------------------------------------------------------------------
 // Bookings page
 // ---------------------------------------------------------------------------
+// Plain-language tabs. `also` lists other status sets (used by dashboard links) that open the same tab.
 const PRESETS = [
-  { value: 'needs', label: 'Needs assignment', status: 'REQUESTED,APPROVED' },
-  { value: 'approval', label: 'Pending approval', status: 'PENDING_APPROVAL' },
-  { value: 'assigned', label: 'Assigned / en route', status: 'ASSIGNED,DRIVER_EN_ROUTE,ARRIVED' },
-  { value: 'progress', label: 'In progress', status: 'IN_PROGRESS' },
-  { value: 'completed', label: 'Completed', status: 'COMPLETED' },
-  { value: 'closed', label: 'Cancelled / rejected / no-show', status: 'CANCELLED,REJECTED,NO_SHOW' },
-  { value: 'all', label: 'All', status: '' },
+  { value: 'waiting', label: 'Waiting for a cab', status: 'REQUESTED,APPROVED,PENDING_APPROVAL', also: ['REQUESTED,APPROVED', 'PENDING_APPROVAL'] },
+  { value: 'assigned', label: 'Cab assigned', status: 'ASSIGNED,DRIVER_EN_ROUTE,ARRIVED', also: [] },
+  { value: 'trip', label: 'On trip', status: 'IN_PROGRESS', also: [] },
+  { value: 'completed', label: 'Completed', status: 'COMPLETED', also: [] },
+  { value: 'cancelled', label: 'Cancelled', status: 'CANCELLED,REJECTED,NO_SHOW', also: [] },
+  { value: 'all', label: 'All', status: '', also: [] },
 ] as const;
 type PresetKey = (typeof PRESETS)[number]['value'] | 'custom';
+const DEFAULT_STATUS = PRESETS[0].status;
 
 const normStatus = (s: string) =>
   s
@@ -456,16 +457,22 @@ const normStatus = (s: string) =>
     .filter(Boolean)
     .sort()
     .join(',');
-const presetFor = (status: string): PresetKey => PRESETS.find((p) => normStatus(p.status) === normStatus(status))?.value ?? 'custom';
+const presetFor = (status: string): PresetKey =>
+  PRESETS.find((p) => [p.status, ...p.also].some((x) => normStatus(x) === normStatus(status)))?.value ?? 'custom';
+
+const EMPTY: Record<string, { title: string; description: string }> = {
+  waiting: { title: 'No one is waiting for a cab', description: 'Every request for this day already has a cab. Pick another day, or open "All".' },
+  assigned: { title: 'No cabs assigned yet', description: 'Assigned rides for this day will appear here.' },
+  trip: { title: 'No trips in progress', description: 'Rides appear here once the driver starts the trip.' },
+};
 
 type Option = { _id: string; label: string };
 
-function NotificationCell({ n }: { n?: BookingRow['notification'] }) {
-  if (!n?.status) return <span className="text-slate-400">—</span>;
-  const tip = [n.lastError ? `Last error: ${n.lastError}` : '', n.attempts ? `Attempts: ${n.attempts}` : '', n.acceptedAt ? `Accepted ${fmtDateTime(n.acceptedAt)}` : ''].filter(Boolean).join(' · ');
+function Pill({ tone, title, children }: { tone: 'red' | 'orange' | 'amber'; title?: string; children: ReactNode }) {
+  const tones = { red: 'bg-red-100 text-red-800', orange: 'bg-orange-100 text-orange-800', amber: 'bg-amber-100 text-amber-800' };
   return (
-    <span title={tip || undefined}>
-      <StatusBadge status={n.status} />
+    <span title={title} className={cn('inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium', tones[tone])}>
+      {children}
     </span>
   );
 }
@@ -473,12 +480,12 @@ function NotificationCell({ n }: { n?: BookingRow['notification'] }) {
 export default function Bookings() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const { timezone, policy } = useOpsOffices();
+  const { timezone, policy, offices } = useOpsOffices();
 
   const initialDate = params.get('date');
   const [date, setDate] = useState(initialDate === 'today' || initialDate === null ? todayISO(timezone) : initialDate === 'all' ? '' : initialDate);
   const initialStatus = params.get('status');
-  const [status, setStatus] = useState(initialStatus === null ? 'REQUESTED,APPROVED' : initialStatus.toUpperCase() === 'ALL' ? '' : initialStatus);
+  const [status, setStatus] = useState(initialStatus === null ? DEFAULT_STATUS : initialStatus.toUpperCase() === 'ALL' ? '' : initialStatus);
   const [office, setOffice] = useState(params.get('office') ?? '');
   const [shift, setShift] = useState(params.get('shift') ?? '');
   const [driverId, setDriverId] = useState(params.get('driverId') ?? '');
@@ -488,6 +495,8 @@ export default function Bookings() {
   const [sort, setSort] = useState('scheduledPickupAt');
   const [page, setPage] = useState(1);
   const [assignFor, setAssignFor] = useState<AssignTarget | null>(null);
+  const extraFilters = [shift, driverId, vehicleId, flags].filter(Boolean).length;
+  const [showMore, setShowMore] = useState(extraFilters > 0);
   const pageSize = 25;
 
   // Keep the URL in sync so the view can be bookmarked / shared / refreshed.
@@ -512,6 +521,13 @@ export default function Bookings() {
     set(v);
     setPage(1);
   };
+  const clearExtraFilters = () => {
+    setShift('');
+    setDriverId('');
+    setVehicleId('');
+    setFlags('');
+    setPage(1);
+  };
 
   const query = qs({
     page,
@@ -530,15 +546,18 @@ export default function Bookings() {
   });
   const { data, isLoading, error, refetch, isFetching } = usePaged<BookingRow>(['ops', 'bookings'], '/ops/bookings', query);
 
+  // Driver / vehicle lists are only needed once "More filters" is open.
   const driverOptions = useQuery({
     queryKey: ['ops', 'drivers', 'options'],
     queryFn: async () => (await get<Paged<{ _id: string; fullName: string; driverCode: string }>>('/ops/drivers?pageSize=100&sort=fullName')).items.map<Option>((d) => ({ _id: d._id, label: `${d.fullName} (${d.driverCode})` })),
     staleTime: 60_000,
+    enabled: showMore,
   });
   const vehicleOptions = useQuery({
     queryKey: ['ops', 'vehicles', 'options'],
     queryFn: async () => (await get<Paged<{ _id: string; registrationNumber: string; model: string }>>('/ops/vehicles?pageSize=100')).items.map<Option>((v) => ({ _id: v._id, label: `${v.registrationNumber} · ${v.model}` })),
     staleTime: 60_000,
+    enabled: showMore,
   });
 
   const preset = presetFor(status);
@@ -550,13 +569,14 @@ export default function Bookings() {
 
   const columns: Column<BookingRow>[] = [
     {
-      key: 'ref',
-      header: 'Reference',
-      sortKey: 'reference',
+      key: 'time',
+      header: 'Pickup',
+      sortKey: 'scheduledPickupAt',
       render: (b) => (
-        <Link to={`/ops/bookings/${b._id}`} onClick={(e) => e.stopPropagation()} className="font-medium text-indigo-600 hover:underline">
-          {b.reference}
-        </Link>
+        <div className="whitespace-nowrap">
+          <p className="font-semibold text-slate-900">{b.pickupTime}</p>
+          {!date && <p className="text-xs text-slate-500">{fmtTravelDate(b.travelDate)}</p>}
+        </div>
       ),
     },
     {
@@ -565,25 +585,29 @@ export default function Bookings() {
       render: (b) => (
         <div className="min-w-36">
           <p className="font-medium text-slate-900">{b.employee?.fullName}</p>
-          <p className="text-xs text-slate-500">{b.employee?.employeeId}</p>
+          <p className="text-xs text-slate-500">
+            {b.employee?.employeeId} · {b.reference}
+          </p>
         </div>
       ),
     },
-    { key: 'pickup', header: 'Pickup', render: (b) => <span className="line-clamp-2 min-w-40" title={b.pickupLocation}>{b.pickupLocation}</span> },
-    { key: 'drop', header: 'Destination', render: (b) => <span className="line-clamp-2 min-w-40" title={b.dropLocation}>{b.dropLocation}</span> },
-    { key: 'date', header: 'Travel date', render: (b) => <span className="whitespace-nowrap">{fmtTravelDate(b.travelDate)}</span> },
-    { key: 'time', header: 'Pickup time', sortKey: 'scheduledPickupAt', render: (b) => <span className="whitespace-nowrap font-medium">{b.pickupTime}</span> },
-    { key: 'pax', header: 'Pax', render: (b) => b.passengers, className: 'text-center' },
     {
-      key: 'shift',
-      header: 'Shift / trip',
+      key: 'route',
+      header: 'From → To',
+      cardWide: true,
       render: (b) => (
-        <div className="whitespace-nowrap text-xs">
-          <p>{b.shift || '—'}</p>
-          <p className="text-slate-500">
-            {humanize(b.tripType)}
-            {b.tripType === 'ROUND_TRIP' && b.leg ? ` · ${humanize(b.leg)}` : ''}
+        <div className="min-w-48 max-w-72 text-sm">
+          <p className="truncate" title={b.pickupLocation}>
+            {b.pickupLocation}
           </p>
+          <p className="truncate text-slate-500" title={b.dropLocation}>
+            → {b.dropLocation}
+          </p>
+          {(b.passengers > 1 || b.tripType === 'ROUND_TRIP') && (
+            <p className="text-xs text-slate-500">
+              {[b.passengers > 1 ? `${b.passengers} people` : '', b.tripType === 'ROUND_TRIP' ? `Round trip${b.leg === 'RETURN' ? ' · return' : ''}` : ''].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </div>
       ),
     },
@@ -595,50 +619,45 @@ export default function Bookings() {
         <div className="flex flex-col items-start gap-1">
           <StatusBadge status={b.status} />
           {b.isDelayed && (
-            <span title={b.delayReason}>
-              <StatusBadge status="DELAYED" />
-            </span>
+            <Pill tone="amber" title={b.delayReason}>
+              Running late
+            </Pill>
           )}
           {b.flaggedForReview && (
-            <span title={b.flagReason} className="inline-flex whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">
+            <Pill tone="orange" title={b.flagReason}>
               Needs review
-            </span>
+            </Pill>
           )}
           {b.cancellationRequest?.status === 'PENDING' && (
-            <span title={b.cancellationRequest.reason} className="inline-flex whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
-              Cancellation requested
-            </span>
+            <Pill tone="red" title={b.cancellationRequest.reason}>
+              Wants to cancel
+            </Pill>
+          )}
+          {b.notification?.status === 'FAILED' && (
+            <Pill tone="red" title={b.notification.lastError}>
+              Email not sent
+            </Pill>
           )}
         </div>
       ),
     },
     {
-      key: 'driver',
-      header: 'Driver',
+      key: 'cab',
+      header: 'Cab',
       render: (b) =>
-        b.driver ? (
-          <div className="whitespace-nowrap">
-            <p>{b.driver.fullName}</p>
-            <p className="text-xs text-slate-500">{b.driver.phone}</p>
+        b.status === 'CANCELLED' || b.status === 'REJECTED' ? (
+          <span className="text-sm text-slate-400">—</span>
+        ) : b.driver || b.vehicle ? (
+          <div className="text-sm lg:whitespace-nowrap">
+            <p className="font-medium text-slate-900">{b.vehicle?.registrationNumber ?? '—'}</p>
+            <p className="text-slate-600">
+              {b.driver?.fullName ?? '—'}
+              {b.driver?.phone ? <span className="text-slate-400"> · {b.driver.phone}</span> : null}
+            </p>
+            {b.assignment?._id && !b.assignment.acknowledgedAt && <p className="text-xs text-amber-700">Driver hasn't confirmed yet</p>}
           </div>
         ) : (
-          <span className="text-slate-400">—</span>
-        ),
-    },
-    { key: 'vehicle', header: 'Vehicle', render: (b) => (b.vehicle ? <span className="whitespace-nowrap">{b.vehicle.registrationNumber}</span> : <span className="text-slate-400">—</span>) },
-    { key: 'notif', header: 'Employee email', render: (b) => <NotificationCell n={b.notification} /> },
-    {
-      key: 'ack',
-      header: 'Driver ack',
-      render: (b) =>
-        !b.assignment?._id ? (
-          <span className="text-slate-400">—</span>
-        ) : b.assignment.acknowledgedAt ? (
-          <span className="inline-flex items-center gap-1 whitespace-nowrap text-emerald-700" title={`Acknowledged ${fmtDateTime(b.assignment.acknowledgedAt, b.timezone)}`}>
-            <CheckCircle2 className="h-4 w-4" aria-hidden /> Yes
-          </span>
-        ) : (
-          <span className="whitespace-nowrap text-amber-700">Waiting</span>
+          <span className="text-sm text-slate-400">Not assigned</span>
         ),
     },
     {
@@ -653,17 +672,27 @@ export default function Bookings() {
               setAssignFor(toAssignTarget(b));
             }}
           >
-            Assign
+            Assign cab
           </Button>
-        ) : null,
+        ) : b.status === 'PENDING_APPROVAL' ? (
+          <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); navigate(`/ops/bookings/${b._id}`); }}>
+            Review
+          </Button>
+        ) : (
+          <Link to={`/ops/bookings/${b._id}`} onClick={(e) => e.stopPropagation()} className="inline-flex min-h-10 items-center whitespace-nowrap px-2 text-sm font-medium text-indigo-600 hover:underline lg:min-h-0 lg:px-0">
+            View
+          </Link>
+        ),
     },
   ];
+
+  const empty = EMPTY[preset] ?? { title: 'No cab requests found', description: 'Try another day, tab or search.' };
 
   return (
     <>
       <PageHeader
         title="Cab requests"
-        subtitle={date ? `Trips on ${fmtTravelDate(date)}` : 'All dates'}
+        subtitle={date ? fmtTravelDate(date) : 'All dates'}
         actions={
           <Button variant="secondary" onClick={() => refetch()} loading={isFetching && !isLoading}>
             Refresh
@@ -672,48 +701,59 @@ export default function Bookings() {
       />
 
       <Card className="mb-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="sm:col-span-2">
-            <DayPicker value={date} onChange={reset(setDate)} allowAll />
+        <div className="flex flex-wrap items-end gap-3">
+          <DayPicker value={date} onChange={reset(setDate)} allowAll label="Day" />
+          {offices.length > 1 && <OfficeSelect value={office} onChange={reset(setOffice)} className="w-56" />}
+          <div className="min-w-56 flex-1">
+            <SearchInput value={q} onChange={reset(setQ)} placeholder="Search name, employee ID, reference or place" />
           </div>
-          <OfficeSelect value={office} onChange={reset(setOffice)} />
-          <Select label="Shift" value={shift} onChange={(e) => reset(setShift)(e.target.value)}>
-            <option value="">All shifts</option>
-            {policy?.shifts
-              .filter((s) => s.active)
-              .map((s) => (
-                <option key={s.code} value={s.code}>
-                  {s.name}
+          <Button variant="ghost" onClick={() => setShowMore((v) => !v)} aria-expanded={showMore}>
+            {showMore ? 'Fewer filters' : extraFilters ? `More filters (${extraFilters})` : 'More filters'}
+          </Button>
+        </div>
+        {showMore && (
+          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Select label="Shift" value={shift} onChange={(e) => reset(setShift)(e.target.value)}>
+              <option value="">All shifts</option>
+              {policy?.shifts
+                .filter((s) => s.active)
+                .map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.name}
+                  </option>
+                ))}
+            </Select>
+            <Select label="Driver" value={driverId} onChange={(e) => reset(setDriverId)(e.target.value)}>
+              <option value="">Any driver</option>
+              {driverOptions.data?.map((d) => (
+                <option key={d._id} value={d._id}>
+                  {d.label}
                 </option>
               ))}
-          </Select>
-          <Select label="Driver" value={driverId} onChange={(e) => reset(setDriverId)(e.target.value)}>
-            <option value="">Any driver</option>
-            {driverOptions.data?.map((d) => (
-              <option key={d._id} value={d._id}>
-                {d.label}
-              </option>
-            ))}
-          </Select>
-          <Select label="Vehicle" value={vehicleId} onChange={(e) => reset(setVehicleId)(e.target.value)}>
-            <option value="">Any vehicle</option>
-            {vehicleOptions.data?.map((v) => (
-              <option key={v._id} value={v._id}>
-                {v.label}
-              </option>
-            ))}
-          </Select>
-          <Select label="Flags" value={flags} onChange={(e) => reset(setFlags)(e.target.value)}>
-            <option value="">No flag filter</option>
-            <option value="delayed">Delayed only</option>
-            <option value="flagged">Needs review only</option>
-            <option value="cancelRequested">Cancellation requested</option>
-          </Select>
-          <div className="space-y-1">
-            <span className="block text-sm font-medium text-slate-700">Search</span>
-            <SearchInput value={q} onChange={reset(setQ)} placeholder="Reference, employee, location…" />
+            </Select>
+            <Select label="Vehicle" value={vehicleId} onChange={(e) => reset(setVehicleId)(e.target.value)}>
+              <option value="">Any vehicle</option>
+              {vehicleOptions.data?.map((v) => (
+                <option key={v._id} value={v._id}>
+                  {v.label}
+                </option>
+              ))}
+            </Select>
+            <Select label="Show only" value={flags} onChange={(e) => reset(setFlags)(e.target.value)}>
+              <option value="">Everything</option>
+              <option value="delayed">Running late</option>
+              <option value="flagged">Needs review</option>
+              <option value="cancelRequested">Wants to cancel</option>
+            </Select>
+            {extraFilters > 0 && (
+              <div className="sm:col-span-2 lg:col-span-4">
+                <Button size="sm" variant="ghost" onClick={clearExtraFilters}>
+                  Clear these filters
+                </Button>
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </Card>
 
       <Tabs
@@ -739,12 +779,7 @@ export default function Bookings() {
           setPage(1);
         }}
         onRowClick={(b) => navigate(`/ops/bookings/${b._id}`)}
-        empty={
-          <EmptyState
-            title={preset === 'needs' ? 'Nothing waiting for a cab' : 'No cab requests match these filters'}
-            description={preset === 'needs' ? 'All requests for this day have been assigned. Try another date or the "All" tab.' : 'Try another date, status or office.'}
-          />
-        }
+        empty={<EmptyState title={empty.title} description={empty.description} />}
       />
       {data && <Pagination page={data.page} total={data.total} totalPages={data.totalPages} onPage={setPage} />}
 

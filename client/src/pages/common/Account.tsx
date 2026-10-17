@@ -54,7 +54,7 @@ export default function Account() {
           />
         </Card>
         {me.user.role === 'EMPLOYEE' && <HomeAddressCard />}
-        {me.user.role !== 'DRIVER' && !(me.user.role === 'EMPLOYEE' && sso?.employeesMicrosoftOnly) && (
+        {me.user.role !== 'DRIVER' && me.user.role !== 'COORDINATOR' && !(me.user.role === 'EMPLOYEE' && sso?.employeesMicrosoftOnly) && (
           <Card title="Change password">
             <form onSubmit={submit} className="space-y-4">
               <Input label="Current password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />

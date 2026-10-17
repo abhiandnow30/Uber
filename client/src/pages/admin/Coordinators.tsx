@@ -96,7 +96,7 @@ function CreateCoordinatorModal({ open, onClose }: { open: boolean; onClose: () 
     setBusy(true);
     try {
       const c = await post<{ _id: string }>('/admin/coordinators', { ...form, officeLocations: offices });
-      toast.success('Coordinator created', `An activation email has been queued for ${form.email}`);
+      toast.success('Coordinator added', `They can now sign in with ${form.email} and their mobile number`);
       qc.invalidateQueries({ queryKey: ['admin-coordinators'] });
       qc.invalidateQueries({ queryKey: ['admin-dashboard'] });
       onClose();
@@ -124,7 +124,7 @@ function CreateCoordinatorModal({ open, onClose }: { open: boolean; onClose: () 
             Cancel
           </Button>
           <Button type="submit" form="coord-form" loading={busy}>
-            Create & invite
+            Add coordinator
           </Button>
         </>
       }
@@ -136,7 +136,7 @@ function CreateCoordinatorModal({ open, onClose }: { open: boolean; onClose: () 
           <Input label="Phone number" type="tel" value={form.phone} onChange={set('phone')} error={errors.phone} required />
         </div>
         <ScopeFields offices={offices} onOffices={setOffices} errors={errors} />
-        <Alert tone="info">The coordinator is created in “Invited” status and receives an activation email. They can only see bookings, drivers and vehicles of the offices assigned here.</Alert>
+        <Alert tone="info">They sign in with this email and mobile number (“Coordinator? Sign in with email and mobile number”). They only see bookings, drivers and vehicles of the offices ticked here.</Alert>
         {error && !Object.keys(errors).length && <Alert tone="error">{error}</Alert>}
       </form>
     </Modal>
