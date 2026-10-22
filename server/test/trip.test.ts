@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AuditLog, Notification } from '../src/models/system.js';
 import { CabAssignment, CabRequest, RideStartCredential, TripStatusHistory } from '../src/models/booking.js';
 import { Driver } from '../src/models/Driver.js';
+import { Employee } from '../src/models/Employee.js';
 import { assign, bookingInput, employeePin, makeDriver, makeEmployee, scenario, toArrived } from './helpers.js';
 
 async function assignedScenario() {
@@ -115,6 +116,15 @@ describe('driver trip lifecycle and ride-start PIN', () => {
     expect(results.filter((r) => r.status === 200)).toHaveLength(1);
     expect(results.filter((r) => r.status === 409).length).toBe(4);
     expect(await TripStatusHistory.countDocuments({ booking: s.bookingId, event: 'TRIP_STARTED' })).toBe(1);
+  });
+
+  it('drivers see the passenger name but never their phone number', async () => {
+    const s = await assignedScenario();
+    await Employee.updateOne({ _id: s.emp.employee._id }, { $set: { phone: '+919876543210' } });
+    const ride = await s.drv.client.get(`/api/driver/rides/${s.assignmentId}`).expect(200);
+    expect(ride.body.employee.name).toBeTruthy();
+    const home = await s.drv.client.get('/api/driver/home').expect(200);
+    for (const body of [ride.body, home.body]) expect(JSON.stringify(body)).not.toContain('9876543210');
   });
 
   it('drivers cannot see or act on other drivers rides', async () => {

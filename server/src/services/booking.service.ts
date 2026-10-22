@@ -27,9 +27,11 @@ export const createBookingSchema = z.object({
   travelDate: z.string().regex(DATE_RE, 'Use YYYY-MM-DD'),
   // Ignored when the shift fixes the cab time.
   pickupTime: z.string().regex(TIME_RE, 'Use HH:mm (24h)').optional(),
+  // The employee changed the shift's cab time for this ride (e.g. leaving an hour after the shift ends).
+  changedPickupTime: z.string().regex(TIME_RE, 'Use HH:mm (24h)').optional(),
   pickupLocation: z.string().trim().min(3, 'Pickup location is required').max(300),
   dropLocation: z.string().trim().min(3, 'Drop-off location is required').max(300),
-  passengers: z.coerce.number().int().min(1).max(60),
+  passengers: z.coerce.number().int().min(1).max(60).default(1),
   tripType: z.enum(['ONE_WAY', 'ROUND_TRIP']).default('ONE_WAY'),
   returnPickupTime: z.string().regex(TIME_RE).optional(),
   shift: z.string().trim().toUpperCase().max(20).optional().or(z.literal('')),
@@ -38,6 +40,18 @@ export const createBookingSchema = z.object({
   notes: z.string().trim().max(500).optional().default(''),
   clientRequestId: z.string().uuid('clientRequestId must be a UUID'),
 });
+
+/**
+ * Date of a shift's cab. The shift's own cab time is on the next day when it is before the shift
+ * starts (e.g. 4 AM for a 7 PM shift). A changed time lands on whichever day puts it closest to
+ * that default, so 5 AM stays the morning after and 11 PM stays the shift's evening.
+ */
+export function shiftCabDate(startTime: string, defaultTime: string, shiftDate: string, time: string) {
+  const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const defaultOffset = toMin(defaultTime) + (defaultTime < startTime ? 1440 : 0);
+  const nextDay = Math.abs(toMin(time) + 1440 - defaultOffset) < Math.abs(toMin(time) - defaultOffset);
+  return nextDay ? DateTime.fromISO(shiftDate).plus({ days: 1 }).toFormat('yyyy-MM-dd') : shiftDate;
+}
 
 async function validateBookingWindow(input: { travelDate: string; pickupTime: string }, timezone: string) {
   const policy = await getPolicy();
@@ -86,14 +100,14 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
   const shift = input.shift ? policy.shifts.find((s) => s.code === input.shift && s.active) : undefined;
   if (input.shift && !shift) throw badRequest('Select a valid shift');
   if (!shift && policy.booking?.requireShift) throw validationError('Select your shift', { fields: { shift: 'Select your shift' } });
-  // A shift with hours fixes the cab time; a cab time before the shift starts is on the next day.
+  // A shift with hours sets the cab time (the employee may change it); see shiftCabDate for the date.
   let travelDate = input.travelDate;
   let pickupTime = input.pickupTime ?? '';
   let shiftDate: string | undefined;
   if (shift?.startTime && shift.defaultPickupTime) {
     shiftDate = input.travelDate;
-    pickupTime = shift.defaultPickupTime;
-    if (pickupTime < shift.startTime) travelDate = DateTime.fromISO(shiftDate).plus({ days: 1 }).toFormat('yyyy-MM-dd');
+    pickupTime = input.changedPickupTime || shift.defaultPickupTime;
+    travelDate = shiftCabDate(shift.startTime, shift.defaultPickupTime, shiftDate, pickupTime);
   }
   if (!pickupTime) throw validationError('Choose a pickup time', { fields: { pickupTime: 'Choose a pickup time' } });
   const winStart = policy.booking?.cabWindowStart;

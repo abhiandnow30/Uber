@@ -38,6 +38,35 @@ describe('company shifts: one cab per shift, 8 PM - 6 AM', () => {
     expect(await CabRequest.findById(night.body.booking._id).lean()).toMatchObject({ travelDate: futureDate(4), pickupTime: '21:00' });
   });
 
+  it('employees can change the cab time; it stays on the day closest to the shift cab', async () => {
+    await useCompanyShifts();
+    const emp = await makeEmployee();
+    const shiftDate = futureDate(2);
+
+    // 7 PM - 4 AM, staying late: 5:00 AM the morning after
+    const late = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: shiftDate, shift: '7PM-4AM', changedPickupTime: '05:00' })).expect(201);
+    expect(await CabRequest.findById(late.body.booking._id).lean()).toMatchObject({ shiftDate, travelDate: nextDay(shiftDate), pickupTime: '05:00' });
+
+    // 1 PM - 10 PM, leaving at 11:30 PM: still the same evening
+    const evening = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(3), shift: '1PM-10PM', changedPickupTime: '23:30' })).expect(201);
+    expect(await CabRequest.findById(evening.body.booking._id).lean()).toMatchObject({ travelDate: futureDate(3), pickupTime: '23:30' });
+
+    // still only inside the cab hours
+    const day = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(4), shift: '7PM-4AM', changedPickupTime: '07:00' }));
+    expect(day.status).toBe(422);
+    expect(day.body.error.code).toBe('OUTSIDE_CAB_HOURS');
+  });
+
+  it('employees save a default shift on their account', async () => {
+    await useCompanyShifts();
+    const emp = await makeEmployee();
+    await emp.client!.patch('/api/me/profile', { defaultShift: '7pm-4am' }).expect(200);
+    expect((await emp.client!.get('/api/auth/me')).body.profile.defaultShift).toBe('7PM-4AM');
+    expect((await emp.client!.patch('/api/me/profile', { defaultShift: 'NOPE' })).status).toBe(422);
+    await emp.client!.patch('/api/me/profile', { defaultShift: '' }).expect(200);
+    expect((await emp.client!.get('/api/auth/me')).body.profile.defaultShift).toBeUndefined();
+  });
+
   it('employees must pick a shift, and cabs never run outside 8 PM - 6 AM', async () => {
     await useCompanyShifts();
     const emp = await makeEmployee();

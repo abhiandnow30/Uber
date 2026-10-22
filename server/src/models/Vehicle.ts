@@ -4,8 +4,8 @@ import { VEHICLE_STATUSES, VEHICLE_TYPES } from '../domain.js';
 const vehicleSchema = new Schema(
   {
     registrationNumber: { type: String, required: true, uppercase: true, trim: true, unique: true },
-    model: { type: String, required: true, trim: true },
-    vehicleType: { type: String, enum: VEHICLE_TYPES, required: true },
+    model: { type: String, trim: true, default: '' },
+    vehicleType: { type: String, enum: VEHICLE_TYPES, default: 'SEDAN' },
     capacity: { type: Number, required: true, min: 1, max: 60 },
     status: { type: String, enum: VEHICLE_STATUSES, default: 'ACTIVE', index: true },
     maintenanceNotes: { type: String },

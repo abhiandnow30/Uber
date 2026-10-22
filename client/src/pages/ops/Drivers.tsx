@@ -1,10 +1,12 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, type Column } from '../../components/ui';
-import { errorMessage, patch, post } from '../../lib/api';
+import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, useToast, type Column } from '../../components/ui';
+import { errorMessage, get, patch, post, type Paged } from '../../lib/api';
 import { fieldErrors, useAction, useListState, usePaged } from '../../lib/hooks';
 import { ExpiryText, OfficeSelect, toDateInput, useOpsOffices } from './OpsDashboard';
+import type { VehicleRow } from './Vehicles';
 
 export type DriverRow = {
   _id: string;
@@ -23,6 +25,64 @@ export type DriverRow = {
   user?: { _id: string; status: string; lastLoginAt?: string } | null;
   activeAssignments?: number;
 };
+
+/**
+ * The driver's vehicle as a dropdown of their current vehicle plus every free, active vehicle in
+ * their office. Choosing one links it straight away (the server ends both previous links).
+ */
+export function VehiclePicker({ driver, className }: { driver: Pick<DriverRow, '_id' | 'fullName' | 'officeLocation' | 'currentVehicle'>; className?: string }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  // Shared cache key: every picker on the page reuses one request.
+  const vehicles = useQuery({ queryKey: ['ops', 'vehicles', 'link-options'], queryFn: () => get<Paged<VehicleRow>>('/ops/vehicles?pageSize=100') });
+  const current = driver.currentVehicle;
+  const choices = (vehicles.data?.items ?? []).filter((v) => v.status === 'ACTIVE' && v.officeLocation === driver.officeLocation && v._id !== current?._id);
+  const free = choices.filter((v) => !v.currentDriver);
+  const taken = choices.filter((v) => v.currentDriver);
+
+  const link = async (vehicleId: string) => {
+    if (!vehicleId || vehicleId === current?._id) return;
+    const v = choices.find((x) => x._id === vehicleId);
+    if (v?.currentDriver && !window.confirm(`${v.registrationNumber} is linked to ${v.currentDriver.fullName}. Move it to ${driver.fullName}? ${v.currentDriver.fullName} will be left without a vehicle.`)) return;
+    setBusy(true);
+    try {
+      await post('/ops/links', { driverId: driver._id, vehicleId });
+      toast.success('Vehicle linked', `${driver.fullName} → ${v?.registrationNumber ?? ''}`);
+      qc.invalidateQueries({ queryKey: ['ops'] });
+    } catch (err) {
+      toast.error('Could not link vehicle', errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={className} onClick={(e) => e.stopPropagation()}>
+      <Select aria-label={`Vehicle for ${driver.fullName}`} value={current?._id ?? ''} onChange={(e) => link(e.target.value)} disabled={busy || vehicles.isLoading}>
+        {current ? <option value={current._id}>{current.registrationNumber}</option> : <option value="">{vehicles.isLoading ? 'Loading…' : choices.length ? 'Select a cab…' : 'No cabs in this office'}</option>}
+        {free.length > 0 && (
+          <optgroup label="Available cabs">
+            {free.map((v) => (
+              <option key={v._id} value={v._id}>
+                {v.registrationNumber}{v.model ? ` · ${v.model}` : ''} · {v.capacity} seats
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {taken.length > 0 && (
+          <optgroup label="Linked to another driver">
+            {taken.map((v) => (
+              <option key={v._id} value={v._id}>
+                {v.registrationNumber} · now {v.currentDriver!.fullName}
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </Select>
+    </div>
+  );
+}
 
 export const VERIFICATION = ['PENDING', 'VERIFIED', 'REJECTED', 'EXPIRED'];
 export const EMPLOYMENT = ['ACTIVE', 'INACTIVE', 'SUSPENDED'];
@@ -149,8 +209,6 @@ export default function Drivers() {
   const list = useListState(
     {
       officeLocation: params.get('office') ?? '',
-      verificationStatus: params.get('verificationStatus') ?? '',
-      employmentStatus: params.get('employmentStatus') ?? '',
       availability: params.get('availability') ?? '',
     },
     'fullName',
@@ -162,11 +220,9 @@ export default function Drivers() {
     { key: 'name', header: 'Name', sortKey: 'fullName', render: (d) => <span className="whitespace-nowrap font-medium text-slate-900">{d.fullName}</span> },
     { key: 'phone', header: 'Phone', render: (d) => <span className="whitespace-nowrap">{d.phone}</span> },
     { key: 'license', header: 'License expiry', sortKey: 'licenseExpiry', render: (d) => <ExpiryText iso={d.licenseExpiry} /> },
-    { key: 'verif', header: 'Verification', render: (d) => <StatusBadge status={d.verificationStatus} /> },
-    { key: 'emp', header: 'Employment', render: (d) => <StatusBadge status={d.employmentStatus} /> },
     { key: 'avail', header: 'Availability', sortKey: 'availability', render: (d) => <StatusBadge status={d.availability} /> },
     { key: 'duty', header: 'On duty', className: 'hidden 2xl:table-cell', render: (d) => (d.onDuty ? <span className="text-emerald-700">Yes</span> : <span className="text-slate-400">No</span>) },
-    { key: 'vehicle', header: 'Current vehicle', render: (d) => (d.currentVehicle ? <span className="whitespace-nowrap">{d.currentVehicle.registrationNumber}</span> : <span className="text-slate-400">—</span>) },
+    { key: 'vehicle', header: 'Current vehicle', render: (d) => <VehiclePicker driver={d} className="min-w-[11rem]" /> },
     { key: 'active', header: 'Active rides', render: (d) => d.activeAssignments ?? 0, className: 'hidden text-center 2xl:table-cell' },
     { key: 'login', header: 'Login', render: (d) => (d.user ? <StatusBadge status={d.user.status} /> : <span className="text-xs text-slate-400">No login</span>) },
   ];
@@ -175,7 +231,7 @@ export default function Drivers() {
     <>
       <PageHeader
         title="Drivers"
-        subtitle="Driver profiles, verification and availability"
+        subtitle="Driver profiles and availability"
         actions={
           <Button icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(true)}>
             Add driver
@@ -183,28 +239,12 @@ export default function Drivers() {
         }
       />
       <Card className="mb-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-3">
           <div className="space-y-1 lg:col-span-1">
             <span className="block text-sm font-medium text-slate-700">Search</span>
             <SearchInput value={list.q} onChange={list.setSearch} placeholder="Name, ID, phone, license…" />
           </div>
           <OfficeSelect value={list.filters.officeLocation} onChange={(v) => list.setFilter('officeLocation', v)} />
-          <Select label="Verification" value={list.filters.verificationStatus} onChange={(e) => list.setFilter('verificationStatus', e.target.value)}>
-            <option value="">Any</option>
-            {VERIFICATION.map((s) => (
-              <option key={s} value={s}>
-                {s.charAt(0) + s.slice(1).toLowerCase()}
-              </option>
-            ))}
-          </Select>
-          <Select label="Employment" value={list.filters.employmentStatus} onChange={(e) => list.setFilter('employmentStatus', e.target.value)}>
-            <option value="">Any</option>
-            {EMPLOYMENT.map((s) => (
-              <option key={s} value={s}>
-                {s.charAt(0) + s.slice(1).toLowerCase()}
-              </option>
-            ))}
-          </Select>
           <Select label="Availability" value={list.filters.availability} onChange={(e) => list.setFilter('availability', e.target.value)}>
             <option value="">Any</option>
             {AVAILABILITY.map((s) => (

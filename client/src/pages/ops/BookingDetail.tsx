@@ -18,7 +18,7 @@ import {
   type Column,
 } from '../../components/ui';
 import { get, post } from '../../lib/api';
-import { fmtDateTime, fmtRelative, fmtTravelDate, humanize } from '../../lib/format';
+import { fmtDateTime, fmtRelative, fmtTravelDate, humanize, mapsDirectionsUrl } from '../../lib/format';
 import { ASSIGNABLE, AssignModal, REASSIGNABLE, type AssignTarget } from './Bookings';
 
 type Person = { _id: string; name: string } | null | undefined;
@@ -413,7 +413,15 @@ export default function BookingDetail() {
             <DescriptionList
               items={[
                 ['Pickup', b.pickupLocation],
-                ['Destination', b.dropLocation],
+                [
+                  'Destination',
+                  <span key="d">
+                    {b.dropLocation}
+                    <a href={mapsDirectionsUrl(b.dropLocation, b.pickupLocation)} target="_blank" rel="noopener noreferrer" className="ml-2 whitespace-nowrap text-sm font-medium text-indigo-600 hover:underline">
+                      Route in Google Maps ↗
+                    </a>
+                  </span>,
+                ],
                 ['Travel date', fmtTravelDate(b.travelDate)],
                 ['Scheduled pickup', `${fmtDateTime(b.scheduledPickupAt, tz)} (${tz})`],
                 ['Passengers', b.passengers],
@@ -454,7 +462,7 @@ export default function BookingDetail() {
                   items={[
                     ['Driver', current.driver ? <Link className="text-indigo-600 hover:underline" to={`/ops/drivers/${current.driver._id}`}>{current.driver.fullName} ({current.driver.driverCode})</Link> : '—'],
                     ['Driver phone', current.driver?.phone ?? '—'],
-                    ['Vehicle', current.vehicle ? <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${current.vehicle._id}`}>{current.vehicle.registrationNumber} · {current.vehicle.model} ({current.vehicle.capacity} seats)</Link> : '—'],
+                    ['Vehicle', current.vehicle ? <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${current.vehicle._id}`}>{current.vehicle.registrationNumber}{current.vehicle.model ? ` · ${current.vehicle.model}` : ''} ({current.vehicle.capacity} seats)</Link> : '—'],
                     ['Assigned by', `${current.assignedBy?.name ?? '—'} · ${fmtDateTime(current.createdAt, tz)}`],
                     ['Start method', current.startMethod ? (current.startMethod === 'OVERRIDE' ? `Support override — ${current.overrideReason ?? ''}` : 'Employee PIN') : '—'],
                     ['Completed by', current.completionMethod ? (current.completionMethod === 'OVERRIDE' ? `Support override — ${current.completionOverrideReason ?? ''}` : 'Driver') : '—'],

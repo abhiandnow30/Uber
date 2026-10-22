@@ -27,7 +27,7 @@ import { del, errorMessage, get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fieldErrors } from '../../lib/hooks';
 import { fmtDateTime, fmtRelative, fmtTravelDate, humanize } from '../../lib/format';
-import { DriverFormModal, EMPLOYMENT, type DriverRow } from './Drivers';
+import { DriverFormModal, EMPLOYMENT, VehiclePicker, type DriverRow } from './Drivers';
 import { ExpiryText } from './OpsDashboard';
 
 type Person = { _id: string; name: string } | null | undefined;
@@ -313,7 +313,7 @@ export default function DriverDetail() {
     { key: 'start', header: 'Start', render: (a) => (a.startMethod ? humanize(a.startMethod) : '—') },
   ];
   const linkCols: Column<DriverDetailData['links'][number]>[] = [
-    { key: 'veh', header: 'Vehicle', render: (l) => (l.vehicle ? <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${l.vehicle._id}`}>{l.vehicle.registrationNumber} · {l.vehicle.model}</Link> : '—') },
+    { key: 'veh', header: 'Vehicle', render: (l) => (l.vehicle ? <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${l.vehicle._id}`}>{l.vehicle.registrationNumber}{l.vehicle.model ? ` · ${l.vehicle.model}` : ''}</Link> : '—') },
     { key: 'from', header: 'Linked', render: (l) => fmtDateTime(l.startedAt) },
     { key: 'to', header: 'Ended', render: (l) => (l.isCurrent ? <StatusBadge status="ACTIVE" /> : fmtDateTime(l.endedAt)) },
     { key: 'by', header: 'Linked by', render: (l) => l.linkedBy?.name ?? '—' },
@@ -420,29 +420,26 @@ export default function DriverDetail() {
             </Card>
             <Card title="Linked vehicle">
               {!d.currentVehicle ? (
-                <p className="text-sm text-slate-500">
-                  No vehicle linked. <Link to="/ops/links" className="text-indigo-600 hover:underline">Link a vehicle</Link>
-                </p>
+                <>
+                  <p className="mb-2 text-sm text-slate-500">No vehicle linked. Choose a free cab to link it.</p>
+                  <VehiclePicker driver={d} />
+                </>
               ) : (
                 <>
                   <p className="text-sm">
                     <Link className="font-medium text-indigo-600 hover:underline" to={`/ops/vehicles/${d.currentVehicle._id}`}>
                       {d.currentVehicle.registrationNumber}
                     </Link>{' '}
-                    · {d.currentVehicle.model} · {d.currentVehicle.capacity} seats <StatusBadge status={d.currentVehicle.status} />
+                    {d.currentVehicle.model ? `· ${d.currentVehicle.model} ` : ''}· {d.currentVehicle.capacity} seats <StatusBadge status={d.currentVehicle.status} />
                   </p>
                   {currentLink && <p className="mt-1 text-xs text-slate-500">Linked {fmtDateTime(currentLink.startedAt)} by {currentLink.linkedBy?.name ?? '—'}</p>}
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex flex-wrap items-end gap-2">
+                    <VehiclePicker driver={d} className="min-w-[11rem] flex-1" />
                     {currentLink && (
-                      <Button size="sm" variant="secondary" onClick={() => setDialog('endLink')}>
+                      <Button variant="secondary" onClick={() => setDialog('endLink')}>
                         End link
                       </Button>
                     )}
-                    <Link to="/ops/links">
-                      <Button size="sm" variant="ghost">
-                        Change vehicle
-                      </Button>
-                    </Link>
                   </div>
                 </>
               )}

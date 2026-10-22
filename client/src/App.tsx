@@ -36,7 +36,6 @@ const Drivers = p(() => import('./pages/ops/Drivers'));
 const DriverDetail = p(() => import('./pages/ops/DriverDetail'));
 const Vehicles = p(() => import('./pages/ops/Vehicles'));
 const VehicleDetail = p(() => import('./pages/ops/VehicleDetail'));
-const Links = p(() => import('./pages/ops/Links'));
 // Employee
 const EmployeeHome = p(() => import('./pages/employee/EmployeeHome'));
 const RequestCab = p(() => import('./pages/employee/RequestCab'));
@@ -107,7 +106,7 @@ export default function App() {
           <Route path="/ops/drivers/:id" element={<RequireRole roles={OPS}><DriverDetail /></RequireRole>} />
           <Route path="/ops/vehicles" element={<RequireRole roles={OPS}><Vehicles /></RequireRole>} />
           <Route path="/ops/vehicles/:id" element={<RequireRole roles={OPS}><VehicleDetail /></RequireRole>} />
-          <Route path="/ops/links" element={<RequireRole roles={OPS}><Links /></RequireRole>} />
+          <Route path="/ops/links" element={<Navigate to="/ops/drivers" replace />} />
 
           <Route path="/employee" element={<RequireRole roles={['EMPLOYEE']}><EmployeeHome /></RequireRole>} />
           <Route path="/employee/request" element={<RequireRole roles={['EMPLOYEE']}><RequestCab /></RequireRole>} />

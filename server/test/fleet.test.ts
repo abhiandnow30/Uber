@@ -30,6 +30,11 @@ describe('fleet management', () => {
     expect(v.body.registrationNumber).toBe('TS09ZZ0001');
     const dup = await coord.client.post('/api/ops/vehicles', { registrationNumber: 'TS09ZZ0001', model: 'Y', vehicleType: 'SEDAN', capacity: 4, officeLocation: 'HYD' });
     expect(dup.status).toBe(409);
+
+    // model, type and permit are optional: registration, seats and office are enough
+    const plain = await coord.client.post('/api/ops/vehicles', { registrationNumber: 'TS09ZZ0003', capacity: 6, officeLocation: 'HYD' });
+    expect(plain.status).toBe(201);
+    expect(plain.body).toMatchObject({ registrationNumber: 'TS09ZZ0003', capacity: 6, model: '', vehicleType: 'SEDAN' });
   });
 
   it('coordinators are restricted to their offices', async () => {

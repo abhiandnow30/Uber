@@ -387,7 +387,7 @@ export function AssignModal({ open, onClose, booking, mode = 'assign' }: { open:
                               <StatusBadge status={v.status} />
                             </div>
                             <p className="mt-0.5 text-xs text-slate-500">
-                              {v.model} · {v.capacity} seats · Linked driver: {v.currentDriver?.fullName ?? 'none'}
+                              {v.model ? `${v.model} · ` : ''}{v.capacity} seats · Linked driver: {v.currentDriver?.fullName ?? 'none'}
                               {driver?.currentVehicle?._id === v._id ? ' · linked to selected driver' : ''}
                             </p>
                             <Problems problems={v.problems} />
@@ -413,7 +413,7 @@ export function AssignModal({ open, onClose, booking, mode = 'assign' }: { open:
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Vehicle</p>
                   <p className="mt-1 font-medium text-slate-900">{vehicle?.registrationNumber}</p>
                   <p className="text-slate-600">
-                    {vehicle?.model} · {vehicle?.capacity} seats
+                    {vehicle?.model ? `${vehicle.model} · ` : ''}{vehicle?.capacity} seats
                   </p>
                 </div>
               </div>
@@ -555,7 +555,7 @@ export default function Bookings() {
   });
   const vehicleOptions = useQuery({
     queryKey: ['ops', 'vehicles', 'options'],
-    queryFn: async () => (await get<Paged<{ _id: string; registrationNumber: string; model: string }>>('/ops/vehicles?pageSize=100')).items.map<Option>((v) => ({ _id: v._id, label: `${v.registrationNumber} · ${v.model}` })),
+    queryFn: async () => (await get<Paged<{ _id: string; registrationNumber: string; model: string }>>('/ops/vehicles?pageSize=100')).items.map<Option>((v) => ({ _id: v._id, label: v.model ? `${v.registrationNumber} · ${v.model}` : v.registrationNumber })),
     staleTime: 60_000,
     enabled: showMore,
   });

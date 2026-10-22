@@ -7,12 +7,12 @@ import { CabRequest } from '../models/booking.js';
 import { Employee, EMPLOYEE_EDITABLE_FIELDS } from '../models/Employee.js';
 import { AuthToken, Notification, Session } from '../models/system.js';
 import { User } from '../models/User.js';
-import { AppError, badRequest, conflict, notFound } from '../utils/errors.js';
+import { AppError, badRequest, conflict, notFound, validationError } from '../utils/errors.js';
 import { escapeRegex, paged, resolveSort, type Pagination } from '../utils/listing.js';
 import { audit, type Actor } from './audit.service.js';
 import { employeesUseMicrosoftOnly, issueActivation, normalizeEmail } from './auth.service.js';
 import { cancelBookingInternal } from './booking.service.js';
-import { activeOfficeCodes } from './policy.service.js';
+import { activeOfficeCodes, getPolicy } from './policy.service.js';
 import { revokeAllSessions } from './session.service.js';
 
 export const EMPLOYEE_ID_RE = /^[A-Z0-9][A-Z0-9_-]{1,29}$/;
@@ -242,7 +242,8 @@ export async function revokeInvitation(actor: Actor, employeeId: string) {
 // ---------------------------------------------------------------------------
 export const selfProfileSchema = z
   .object({
-    homeAddress: z.string().trim().min(5, 'Enter your full home address').max(300),
+    homeAddress: z.string().trim().min(5, 'Enter your full home address').max(300).optional(),
+    defaultShift: z.string().trim().toUpperCase().max(20).optional(),
     phone: z
       .string()
       .trim()
@@ -262,12 +263,20 @@ export async function updateMyProfile(actor: Actor, input: z.infer<typeof selfPr
   return withTransaction(async ({ session }) => {
     const employee = await Employee.findOne({ user: actor.id }).session(session);
     if (!employee) throw notFound('Employee profile');
+    if (input.defaultShift) {
+      const policy = await getPolicy();
+      if (!policy.shifts.some((s) => s.code === input.defaultShift && s.active)) {
+        throw validationError('Select a valid shift', { fields: { defaultShift: 'Select a valid shift' } });
+      }
+    }
     const changed: string[] = [];
-    if (input.homeAddress !== (employee.homeAddress ?? '')) changed.push('homeAddress');
+    if (input.homeAddress !== undefined && input.homeAddress !== (employee.homeAddress ?? '')) changed.push('homeAddress');
+    if (input.defaultShift !== undefined && input.defaultShift !== (employee.defaultShift ?? '')) changed.push('defaultShift');
     if (input.phone !== undefined && input.phone !== (employee.phone ?? '')) changed.push('phone');
     if (!changed.length) return employee;
-    employee.homeAddress = input.homeAddress;
+    if (input.homeAddress !== undefined) employee.homeAddress = input.homeAddress;
     if (changed.includes('homeAddress')) employee.homeAddressUpdatedAt = new Date();
+    if (input.defaultShift !== undefined) employee.defaultShift = input.defaultShift || undefined;
     if (input.phone !== undefined) {
       employee.phone = input.phone;
       await User.updateOne({ _id: employee.user }, { $set: { phone: input.phone } }, { session });

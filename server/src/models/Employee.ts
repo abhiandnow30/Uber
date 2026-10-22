@@ -23,6 +23,8 @@ const employeeSchema = new Schema(
     // read it; coordinators and drivers only see the pickup/drop text of a booking.
     homeAddress: { type: String, trim: true, maxlength: 300 },
     homeAddressUpdatedAt: { type: Date },
+    // Shift code the employee usually works; pre-selected on the cab request form.
+    defaultShift: { type: String, trim: true, uppercase: true, maxlength: 20 },
     source: { type: String, enum: ['MANUAL', 'IMPORT', 'ACCESS_REQUEST', 'SSO', 'SEED'], default: 'MANUAL' },
     // Set when an admin deletes an employee who has ride history: the record stays only so past
     // rides and reports keep their name; personal details are erased and access is removed.

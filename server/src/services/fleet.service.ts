@@ -235,8 +235,9 @@ export async function getDriver(actor: Actor, id: string) {
 // ===========================================================================
 export const vehicleSchema = z.object({
   registrationNumber: z.string().trim().toUpperCase().transform((s) => s.replace(/\s+/g, '')).pipe(z.string().regex(/^[A-Z0-9-]{4,15}$/, 'Invalid registration number')),
-  model: z.string().trim().min(1).max(50),
-  vehicleType: z.enum(VEHICLE_TYPES),
+  // Not asked for on the vehicle form any more; kept for older vehicles and integrations.
+  model: z.string().trim().max(50).optional(),
+  vehicleType: z.enum(VEHICLE_TYPES).optional(),
   capacity: z.coerce.number().int().min(1).max(60),
   officeLocation: z.string().trim().toUpperCase(),
   // '' clears the date (null), omitted leaves it unchanged

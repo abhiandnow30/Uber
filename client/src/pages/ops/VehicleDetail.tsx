@@ -137,7 +137,7 @@ export default function VehicleDetail() {
         title={v.registrationNumber}
         subtitle={
           <span className="inline-flex flex-wrap items-center gap-2">
-            {v.model} · {humanize(v.vehicleType)} · {v.capacity} seats · {v.officeLocation}
+            {v.model ? `${v.model} · ` : ''}{v.capacity} seats · {v.officeLocation}
             <StatusBadge status={v.status} />
           </span>
         }
@@ -164,13 +164,10 @@ export default function VehicleDetail() {
             <DescriptionList
               items={[
                 ['Registration', v.registrationNumber],
-                ['Model', v.model],
-                ['Type', humanize(v.vehicleType)],
                 ['Capacity', `${v.capacity} passengers`],
                 ['Office', v.officeLocation],
                 ['Status', <StatusBadge key="s" status={v.status} />],
                 ['Insurance expiry', <ExpiryText key="i" iso={v.insuranceExpiry} />],
-                ['Permit expiry', <ExpiryText key="p" iso={v.permitExpiry} />],
                 ['Maintenance notes', v.maintenanceNotes || '—'],
                 ['Maintenance due', fmtDate(v.maintenanceDueAt)],
                 ['Added', fmtDateTime(v.createdAt)],
@@ -188,9 +185,7 @@ export default function VehicleDetail() {
             ) : (
               <p className="text-sm text-slate-500">No driver linked.</p>
             )}
-            <Link to="/ops/links" className="mt-3 inline-block text-sm text-indigo-600 hover:underline">
-              Manage driver–vehicle links
-            </Link>
+            <p className="mt-3 text-xs text-slate-500">Link a driver from the Drivers page or the driver&apos;s profile.</p>
           </Card>
         </div>
         <Card>

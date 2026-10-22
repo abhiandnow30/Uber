@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, CheckCircle2, MapPin, Navigation, Phone, PlayCircle, ThumbsUp } from 'lucide-react';
+import { ArrowLeft, Check, CheckCircle2, MapPin, Navigation, PlayCircle } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
 import { ApiError, errorMessage, get, post } from '../../lib/api';
-import { fmtDateTime, fmtTime, fmtTravelDate } from '../../lib/format';
+import { fmtDateTime, fmtTime, fmtTravelDate, mapsDirectionsUrl } from '../../lib/format';
 
 type Ride = {
   assignmentId: string;
@@ -30,7 +30,7 @@ type Ride = {
     notes?: string;
     isDelayed?: boolean;
   } | null;
-  employee: { name?: string; phone?: string } | null;
+  employee: { name?: string } | null;
   pin: { status: string; attemptsRemaining: number } | null;
   driverNotes?: string;
 };
@@ -299,18 +299,7 @@ export default function DriverRide() {
 
   let primary: ReactNode = null;
   if (!terminal) {
-    if (status === 'ASSIGNED' && !ride.acknowledgedAt) {
-      primary = (
-        <div className="space-y-3">
-          <Button size="xl" loading={busy} onClick={() => run('acknowledge', 'Assignment acknowledged')} icon={<ThumbsUp className="h-6 w-6" aria-hidden />}>
-            Acknowledge assignment
-          </Button>
-          <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setDialog('decline')}>
-            Can't take this ride
-          </Button>
-        </div>
-      );
-    } else if (status === 'ASSIGNED') {
+    if (status === 'ASSIGNED') {
       primary = (
         <div className="space-y-3">
           <Button size="xl" loading={busy} onClick={() => run('en-route', 'On your way — the passenger has been notified')} icon={<Navigation className="h-6 w-6" aria-hidden />}>
@@ -395,6 +384,19 @@ export default function DriverRide() {
 
       {primary && <div>{primary}</div>}
 
+      {/* Navigation: to the pickup until the passenger is in the cab, then to the drop-off */}
+      {!terminal && b && (
+        <a
+          href={['ARRIVED', 'IN_PROGRESS'].includes(status ?? '') ? mapsDirectionsUrl(b.dropLocation) : mapsDirectionsUrl(b.pickupLocation)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white text-lg font-semibold text-indigo-700 shadow-xs active:bg-slate-50"
+        >
+          <MapPin className="h-5 w-5" aria-hidden />
+          {['ARRIVED', 'IN_PROGRESS'].includes(status ?? '') ? 'Navigate to drop-off' : 'Navigate to pickup'}
+        </a>
+      )}
+
       {terminal && (
         <Card title="Ride summary">
           {ride.assignmentStatus !== 'ACTIVE' && ride.assignmentStatus !== 'COMPLETED' && (
@@ -407,7 +409,6 @@ export default function DriverRide() {
           <DescriptionList
             items={[
               ['Outcome', <StatusBadge key="o" status={ride.assignmentStatus === 'ACTIVE' ? status : ride.assignmentStatus} />],
-              ['Acknowledged', ride.acknowledgedAt ? fmtDateTime(ride.acknowledgedAt, tz) : null],
               ['En route', ride.enRouteAt ? fmtDateTime(ride.enRouteAt, tz) : null],
               ['Arrived', ride.arrivedAt ? fmtDateTime(ride.arrivedAt, tz) : null],
               ['Started', ride.startedAt ? fmtDateTime(ride.startedAt, tz) : null],
@@ -425,16 +426,7 @@ export default function DriverRide() {
             ['Passengers', b?.passengers],
             [
               'Passenger',
-              ride.employee ? (
-                <span key="e">
-                  {ride.employee.name}
-                  {ride.employee.phone && isActive && (
-                    <a href={`tel:${ride.employee.phone}`} className="mt-1 flex min-h-11 items-center gap-1.5 text-base font-medium text-indigo-700 underline">
-                      <Phone className="h-4 w-4" aria-hidden /> {ride.employee.phone}
-                    </a>
-                  )}
-                </span>
-              ) : null,
+              ride.employee?.name ?? null,
             ],
             ['Vehicle', ride.vehicle?.registrationNumber ? `${ride.vehicle.registrationNumber}${ride.vehicle.model ? ` · ${ride.vehicle.model}` : ''}` : null],
             ['Passenger notes', b?.notes || null],
@@ -474,7 +466,7 @@ export default function DriverRide() {
         onClose={() => setDialog(null)}
         onConfirm={(reason) => confirmAction('no-show', 'Ride closed as no-show', { reason }).then(() => refetch())}
         title="Passenger did not show up?"
-        message="Only do this after waiting at the pickup point and trying to call the passenger. The coordinator will be informed."
+        message="Only do this after waiting at the pickup point. If you need to reach the passenger, call the transport coordinator. The coordinator will be informed."
         confirmLabel="Mark as no-show"
         reasonLabel="What happened?"
       />

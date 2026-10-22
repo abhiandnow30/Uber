@@ -38,6 +38,16 @@ export function addDaysISO(ymd: string, days: number) {
 
 export const humanize = (s?: string | null) => (s ? s.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase()) : '—');
 
+/**
+ * Google Maps directions link (no API key needed; opens the Maps app on phones).
+ * Without an origin, Maps starts from the device's current location.
+ */
+export function mapsDirectionsUrl(destination: string, origin?: string) {
+  const p = new URLSearchParams({ api: '1', destination, travelmode: 'driving' });
+  if (origin) p.set('origin', origin);
+  return `https://www.google.com/maps/dir/?${p}`;
+}
+
 export function uuid() {
   return crypto.randomUUID();
 }

@@ -203,7 +203,7 @@ try {
   );
   await drv.goto(`${BASE}${await rideHref.jsonValue()}`, { waitUntil: 'networkidle0' });
   // each step reveals the next single primary action
-  const steps = [['Acknowledge assignment', 'Start driving to pickup'], ['Start driving to pickup', 'I have arrived at pickup'], ['I have arrived at pickup', 'Verify the passenger']];
+  const steps = [['Start driving to pickup', 'I have arrived at pickup'], ['I have arrived at pickup', 'Verify the passenger']];
   for (const [action, next] of steps) {
     try {
       await click(drv, action);

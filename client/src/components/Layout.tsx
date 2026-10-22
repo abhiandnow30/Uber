@@ -41,7 +41,6 @@ const SECTION_TABS: Array<{ roles: Role[]; tabs: Tab[] }> = [
     tabs: [
       { to: '/ops/drivers', label: 'Drivers' },
       { to: '/ops/vehicles', label: 'Vehicles' },
-      { to: '/ops/links', label: 'Driver \u2194 vehicle' },
     ],
   },
   {
@@ -63,14 +62,14 @@ const NAV: Record<Role, NavItem[]> = {
     { to: '/admin/coordinators', label: 'Coordinators', icon: <UserCog className={ic} /> },
     { to: '/admin/admins', label: 'Admins', icon: <ShieldCheck className={ic} /> },
     { to: '/ops/bookings', label: 'Cab requests', icon: <ClipboardList className={ic} /> },
-    { to: '/ops/drivers', label: 'Drivers & vehicles', icon: <Car className={ic} />, match: ['/ops/vehicles', '/ops/links'] },
+    { to: '/ops/drivers', label: 'Drivers & vehicles', icon: <Car className={ic} />, match: ['/ops/vehicles'] },
     { to: '/admin/reports', label: 'Reports', icon: <BarChart3 className={ic} /> },
     { to: '/admin/policy', label: 'Settings', icon: <Settings className={ic} />, match: ['/admin/notifications', '/admin/audit'] },
   ],
   COORDINATOR: [
     { to: '/ops', label: 'Dashboard', icon: <Home className={ic} />, end: true },
     { to: '/ops/bookings', label: 'Cab requests', icon: <ClipboardList className={ic} /> },
-    { to: '/ops/drivers', label: 'Drivers & vehicles', icon: <Car className={ic} />, match: ['/ops/vehicles', '/ops/links'] },
+    { to: '/ops/drivers', label: 'Drivers & vehicles', icon: <Car className={ic} />, match: ['/ops/vehicles'] },
   ],
   EMPLOYEE: [
     { to: '/employee', label: 'Home', icon: <Home className={ic} />, end: true },

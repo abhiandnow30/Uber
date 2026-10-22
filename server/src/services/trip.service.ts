@@ -43,7 +43,8 @@ function requireActive(assignment: { status: string }) {
 // ---------------------------------------------------------------------------
 // Driver dashboard data
 // ---------------------------------------------------------------------------
-function rideView(a: Record<string, unknown>, b: Record<string, unknown> | null, employee?: { fullName?: string | null; phone?: string | null } | null) {
+// Drivers see the passenger's name only, never their phone number.
+function rideView(a: Record<string, unknown>, b: Record<string, unknown> | null, employee?: { fullName?: string | null } | null) {
   return {
     assignmentId: a._id,
     assignmentStatus: a.status,
@@ -61,7 +62,7 @@ function rideView(a: Record<string, unknown>, b: Record<string, unknown> | null,
           pickupLocation: b.pickupLocation, dropLocation: b.dropLocation, passengers: b.passengers, notes: b.notes, isDelayed: b.isDelayed,
         }
       : null,
-    employee: employee ? { name: employee.fullName, phone: employee.phone } : null,
+    employee: employee ? { name: employee.fullName } : null,
   };
 }
 
@@ -79,7 +80,7 @@ export async function driverHome(actor: Actor) {
     .populate('booking')
     .lean();
   const empIds = assignments.map((a) => (a.booking as unknown as { employee: unknown })?.employee).filter(Boolean);
-  const employees = new Map((await Employee.find({ _id: { $in: empIds } }, { fullName: 1, phone: 1 }).lean()).map((e) => [String(e._id), e]));
+  const employees = new Map((await Employee.find({ _id: { $in: empIds } }, { fullName: 1 }).lean()).map((e) => [String(e._id), e]));
   const views = assignments.map((a) => {
     const b = a.booking as unknown as Record<string, unknown>;
     return rideView(a as unknown as Record<string, unknown>, b, employees.get(String(b?.employee)));
@@ -113,7 +114,7 @@ export async function driverRide(actor: Actor, assignmentId: string) {
   const { assignment, booking } = await myAssignment(actor, assignmentId);
   const [vehicle, employee, cred] = await Promise.all([
     mongoose.model('Vehicle').findById(assignment.vehicle).select('registrationNumber model capacity').lean(),
-    Employee.findById(booking.employee, { fullName: 1, phone: 1 }).lean(),
+    Employee.findById(booking.employee, { fullName: 1 }).lean(),
     RideStartCredential.findOne({ assignment: assignment._id }).sort({ createdAt: -1 }).select('status attempts maxAttempts expiresAt').lean(),
   ]);
   return {

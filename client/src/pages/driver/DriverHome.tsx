@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Bell, Car, ChevronRight, History } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, EmptyState, ErrorState, Spinner, cn, useToast } from '../../components/ui';
-import { errorMessage, get, post } from '../../lib/api';
+import { Alert, Button, Card, EmptyState, ErrorState, Spinner } from '../../components/ui';
+import { get, post } from '../../lib/api';
 import { fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 
 type Vehicle = { registrationNumber?: string; model?: string; capacity?: number; status?: string } | null;
@@ -32,7 +32,7 @@ type RideView = {
     notes?: string;
     isDelayed?: boolean;
   } | null;
-  employee: { name?: string; phone?: string } | null;
+  employee: { name?: string } | null;
 };
 
 type DriverHomeData = {
@@ -69,28 +69,7 @@ const isSameLocalDay = (iso?: string | null) => {
   return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
 };
 
-/** A ride waiting for the driver to confirm it. */
-function ConfirmCard({ r }: { r: RideView }) {
-  const b = r.booking;
-  return (
-    <Link to={`/driver/rides/${r.assignmentId}`} className="block rounded-2xl border-2 border-amber-400 bg-white p-4 shadow-sm active:bg-amber-50">
-      <p className="text-3xl font-bold text-slate-900">{b?.pickupTime ?? '—'}</p>
-      <p className="text-sm text-slate-600">{b ? fmtTravelDate(b.travelDate) : '—'}</p>
-      {b && (
-        <p className="mt-2 text-lg text-slate-900">
-          <span className="text-slate-500">Pickup: </span>
-          {b.pickupLocation}
-        </p>
-      )}
-      <p className="mt-1 font-mono text-xs text-slate-500">{b?.reference}</p>
-      <span className="mt-3 flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 text-lg font-semibold text-slate-900">
-        View & confirm <ArrowRight className="h-5 w-5" aria-hidden />
-      </span>
-    </Link>
-  );
-}
-
-/** An upcoming (already confirmed) ride. */
+/** An upcoming ride. */
 function RideCard({ r }: { r: RideView }) {
   const b = r.booking;
   return (
@@ -117,9 +96,7 @@ function RideCard({ r }: { r: RideView }) {
 
 export default function DriverHome() {
   const qc = useQueryClient();
-  const toast = useToast();
   const navigate = useNavigate();
-  const [dutyBusy, setDutyBusy] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const { data, isLoading, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['driver', 'home'],
@@ -127,31 +104,25 @@ export default function DriverHome() {
     refetchInterval: 30_000,
   });
 
+  // There is no confirm step for drivers: a ride shown here counts as seen, so the
+  // coordinator's "not acknowledged" alert only fires for drivers who never open the app.
+  const acked = useRef(new Set<string>());
+  useEffect(() => {
+    const unseen = [...(data?.today ?? []), ...(data?.upcoming ?? [])].filter((r) => r.assignmentStatus === 'ACTIVE' && !r.acknowledgedAt && !acked.current.has(r.assignmentId));
+    if (!unseen.length) return;
+    unseen.forEach((r) => acked.current.add(r.assignmentId));
+    Promise.allSettled(unseen.map((r) => post(`/driver/rides/${r.assignmentId}/acknowledge`, {}))).then(() => qc.invalidateQueries({ queryKey: ['driver'] }));
+  }, [data, qc]);
+
   if (isLoading) return <Spinner />;
   if (error || !data) return <ErrorState error={error} onRetry={refetch} />;
 
   const d = data.driver;
   const cv = vehicleOf(d?.currentVehicle);
-  const toggleDuty = async () => {
-    if (!d) return;
-    setDutyBusy(true);
-    try {
-      const res = await post<{ onDuty: boolean; availability: string }>('/driver/duty', { onDuty: !d.onDuty });
-      toast.success(res.onDuty ? 'You are on duty' : 'You are off duty', `Availability: ${humanize(res.availability)}`);
-      qc.invalidateQueries({ queryKey: ['driver'] });
-      qc.invalidateQueries({ queryKey: ['me'] });
-    } catch (e) {
-      toast.error('Could not change duty status', errorMessage(e));
-    } finally {
-      setDutyBusy(false);
-    }
-  };
 
   const active = data.activeTrip;
   const allUpcoming = [...data.today, ...data.upcoming];
-  const toConfirm = allUpcoming.filter((r) => r.assignmentStatus === 'ACTIVE' && !r.acknowledgedAt);
-  const confirmed = allUpcoming.filter((r) => !toConfirm.includes(r));
-  const visibleNext = showAll ? confirmed : confirmed.slice(0, 3);
+  const visibleNext = showAll ? allUpcoming : allUpcoming.slice(0, 3);
   const doneToday = data.completed.filter((r) => isSameLocalDay(r.completedAt)).length;
   const movedCount = data.cancelledOrReassigned.length;
   const noRides = !active && !allUpcoming.length;
@@ -159,7 +130,7 @@ export default function DriverHome() {
 
   return (
     <div className="space-y-6">
-      {/* Header: who am I, which car, am I working */}
+      {/* Header: who am I, which car */}
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -176,29 +147,6 @@ export default function DriverHome() {
             )}
           </Link>
         </div>
-
-        {d && (
-          <div className={cn('mt-4 flex items-center justify-between gap-3 rounded-xl p-3', d.onDuty ? 'bg-emerald-50' : 'bg-slate-100')}>
-            <div>
-              <p id="duty-label" className={cn('text-lg font-bold', d.onDuty ? 'text-emerald-800' : 'text-slate-700')}>
-                You are {d.onDuty ? 'ON DUTY' : 'OFF DUTY'}
-              </p>
-              <p className="text-sm text-slate-600">{d.onDuty ? 'You will get new rides.' : 'Turn on to get rides.'}</p>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={d.onDuty}
-              aria-label="On duty"
-              aria-describedby="duty-label"
-              disabled={dutyBusy}
-              onClick={toggleDuty}
-              className={cn('relative inline-flex h-12 w-24 shrink-0 items-center rounded-full transition-colors disabled:opacity-60', d.onDuty ? 'bg-emerald-600' : 'bg-slate-400')}
-            >
-              <span className={cn('inline-block h-10 w-10 transform rounded-full bg-white shadow-sm transition-transform', d.onDuty ? 'translate-x-13' : 'translate-x-1')} />
-            </button>
-          </div>
-        )}
       </section>
 
       {problem && d && (
@@ -226,28 +174,12 @@ export default function DriverHome() {
         </section>
       )}
 
-      {/* New rides that the driver still has to confirm */}
-      {toConfirm.length > 0 && (
-        <section aria-label="New rides to confirm" className="rounded-2xl bg-amber-50 p-3">
-          <h2 className="mb-3 text-lg font-bold text-amber-900">
-            New rides to confirm ({toConfirm.length})
-          </h2>
-          <ul className="space-y-3">
-            {toConfirm.map((r) => (
-              <li key={r.assignmentId}>
-                <ConfirmCard r={r} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
       {noRides ? (
         <Card>
-          <EmptyState title="No rides right now" description={d?.onDuty ? 'We will tell you when a ride is given to you.' : 'Turn on duty to get rides.'} />
+          <EmptyState title="No rides right now" description="We will tell you when a ride is given to you." />
         </Card>
       ) : (
-        confirmed.length > 0 && (
+        allUpcoming.length > 0 && (
           <section aria-label="Next rides">
             <h2 className="mb-3 text-lg font-bold text-slate-900">Next rides</h2>
             <ul className="space-y-3">
@@ -257,9 +189,9 @@ export default function DriverHome() {
                 </li>
               ))}
             </ul>
-            {confirmed.length > 3 && (
+            {allUpcoming.length > 3 && (
               <Button size="lg" variant="secondary" className="mt-3 w-full" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
-                {showAll ? 'Show fewer' : `Show all (${confirmed.length})`}
+                {showAll ? 'Show fewer' : `Show all (${allUpcoming.length})`}
               </Button>
             )}
           </section>

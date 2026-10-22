@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Home } from 'lucide-react';
-import { Alert, Button, Card, DescriptionList, Input, PageHeader, StatusBadge, Textarea, useToast } from '../../components/ui';
+import { Clock, Home } from 'lucide-react';
+import { Alert, Button, Card, DescriptionList, Input, PageHeader, Select, StatusBadge, Textarea, useToast } from '../../components/ui';
 import { errorMessage, patch, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fieldErrors } from '../../lib/hooks';
 import { fmtDateTime, humanize } from '../../lib/format';
+import { fmt12h, usePolicy } from '../../lib/policy';
 import { useSsoConfig } from '../../lib/sso';
 import { PasswordFields, passwordOk } from '../public/Activate';
 
@@ -53,6 +54,7 @@ export default function Account() {
             ]}
           />
         </Card>
+        {me.user.role === 'EMPLOYEE' && <ShiftCard />}
         {me.user.role === 'EMPLOYEE' && <HomeAddressCard />}
         {me.user.role !== 'DRIVER' && me.user.role !== 'COORDINATOR' && !(me.user.role === 'EMPLOYEE' && sso?.employeesMicrosoftOnly) && (
           <Card title="Change password">
@@ -68,6 +70,63 @@ export default function Account() {
         )}
       </div>
     </>
+  );
+}
+
+/** Employees save the shift they usually work; it is pre-selected on the cab request form. */
+function ShiftCard() {
+  const { me, refresh } = useAuth();
+  const toast = useToast();
+  const { data: policy } = usePolicy();
+  const saved = ((me?.profile ?? {}) as { defaultShift?: string }).defaultShift ?? '';
+  const [shift, setShift] = useState(saved);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setShift(saved);
+  }, [saved]);
+  const shifts = policy?.shifts.filter((s) => s.active) ?? [];
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await patch('/me/profile', { defaultShift: shift });
+      await refresh();
+      toast.success('Shift saved', 'It will be selected automatically when you request a cab.');
+    } catch (err) {
+      setError(fieldErrors(err).defaultShift ?? errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          <Clock className="h-4 w-4" aria-hidden /> My shift
+        </span>
+      }
+    >
+      <form onSubmit={save} className="space-y-4">
+        {!saved && <Alert tone="info">Save your shift so it is selected for you when you request a cab.</Alert>}
+        <Select label="Shift" value={shift} onChange={(e) => setShift(e.target.value)} error={error}>
+          <option value="">No default shift</option>
+          {shifts.map((s) => (
+            <option key={s.code} value={s.code}>
+              {s.name}
+              {s.defaultPickupTime ? ` · cab ${fmt12h(s.defaultPickupTime)}` : ''}
+            </option>
+          ))}
+        </Select>
+        <p className="text-xs text-slate-500">You can still pick a different shift or cab time for a single ride on the request form.</p>
+        <Button type="submit" loading={busy} disabled={shift === saved}>
+          Save shift
+        </Button>
+      </form>
+    </Card>
   );
 }
 

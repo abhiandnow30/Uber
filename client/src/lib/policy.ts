@@ -37,13 +37,20 @@ export function fmt12h(hhmm?: string) {
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
-/** A shift with hours fixes the cab time; returns the cab's date and time for a given shift date. */
-export function cabFor(shift: Shift | undefined, shiftDate: string) {
+const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+
+/**
+ * A shift with hours sets the cab time; returns the cab's date and time for a given shift date.
+ * `time` overrides the shift's cab time and lands on whichever day is closest to it (same rule as the server).
+ */
+export function cabFor(shift: Shift | undefined, shiftDate: string, time?: string) {
   if (!shift?.startTime || !shift.defaultPickupTime || !shiftDate) return null;
+  const t = time || shift.defaultPickupTime;
+  const defaultOffset = toMin(shift.defaultPickupTime) + (shift.defaultPickupTime < shift.startTime ? 1440 : 0);
+  const next = Math.abs(toMin(t) + 1440 - defaultOffset) < Math.abs(toMin(t) - defaultOffset);
   const [y, mo, d] = shiftDate.split('-').map(Number);
-  const next = shift.defaultPickupTime < shift.startTime;
   const date = next ? new Date(Date.UTC(y, mo - 1, d + 1)).toISOString().slice(0, 10) : shiftDate;
-  return { date, time: shift.defaultPickupTime, nextDay: next };
+  return { date, time: t, nextDay: next };
 }
 
 export const DIRECTION_LABEL: Record<string, string> = { TO_OFFICE: 'Home → Office', FROM_OFFICE: 'Office → Home' };
