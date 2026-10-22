@@ -1,9 +1,12 @@
+import { DateTime } from 'luxon';
 import { config } from '../config.js';
 import { withTransaction } from '../db.js';
+import { OPEN_STATUSES } from '../domain.js';
 import { logger } from '../logger.js';
 import { CabAssignment, CabRequest, RideStartCredential } from '../models/booking.js';
 import { Driver } from '../models/Driver.js';
 import { Employee } from '../models/Employee.js';
+import { User } from '../models/User.js';
 import { Vehicle } from '../models/Vehicle.js';
 import { addMinutes } from '../utils/time.js';
 import { SYSTEM_ACTOR } from './audit.service.js';
@@ -125,6 +128,50 @@ export async function refreshAvailabilities() {
   for (const d of drivers) await refreshDriverAvailability(d._id);
 }
 
+// Daily reminder window in each office's local time: sent from 6 PM, or later the same
+// evening if the server was down at 6, but never in the middle of the night.
+const REMINDER_FROM = '18:00';
+const REMINDER_UNTIL = '22:00';
+const reminderDone = new Map<string, string>(); // office -> local date already handled
+
+/**
+ * At 6 PM office time, emails every signed-in (ACTIVE) employee who has no open cab request
+ * for tomorrow, reminding them to request one. One email per employee per day (idempotency key).
+ */
+export async function sendDailyBookingReminders(now: Date) {
+  const policy = await getPolicy();
+  if ((policy.notifications as Record<string, boolean> | undefined)?.dailyBookingReminder === false) return 0;
+  let queued = 0;
+  for (const office of policy.officeLocations.filter((o) => o.active)) {
+    const local = DateTime.fromJSDate(now).setZone(office.timezone);
+    const hhmm = local.toFormat('HH:mm');
+    const today = local.toFormat('yyyy-MM-dd');
+    if (hhmm < REMINDER_FROM || hhmm >= REMINDER_UNTIL || reminderDone.get(office.code) === today) continue;
+    const tomorrow = local.plus({ days: 1 }).toFormat('yyyy-MM-dd');
+
+    const signedIn = await User.find({ role: 'EMPLOYEE', status: 'ACTIVE' }, { _id: 1 }).lean();
+    const employees = await Employee.find({ officeLocation: office.code, deletedAt: null, user: { $in: signedIn.map((u) => u._id) } }, { fullName: 1, email: 1, user: 1 }).lean();
+    const booked = new Set(
+      (await CabRequest.distinct('employee', { employee: { $in: employees.map((e) => e._id) }, status: { $in: OPEN_STATUSES }, $or: [{ shiftDate: tomorrow }, { travelDate: tomorrow }] })).map(String),
+    );
+    for (const e of employees) {
+      if (booked.has(String(e._id))) continue;
+      const id = await enqueueEmail(null, {
+        idempotencyKey: `daily-booking-reminder:${e._id}:${today}`,
+        template: 'DAILY_BOOKING_REMINDER',
+        to: e.email,
+        toUserId: String(e.user),
+        params: { name: e.fullName, shiftDate: DateTime.fromISO(tomorrow).toFormat('ccc, d LLL yyyy'), cutoffTime: policy.booking?.dailyCutoffTime || '' },
+        preference: 'dailyBookingReminder',
+      });
+      if (id) queued++;
+    }
+    reminderDone.set(office.code, today);
+  }
+  if (queued) logger.info({ queued }, 'Daily booking reminders queued');
+  return queued;
+}
+
 export async function runMonitorsOnce() {
   const now = new Date();
   await expirePins(now);
@@ -132,6 +179,7 @@ export async function runMonitorsOnce() {
   await detectUnacknowledged(now);
   await detectOverdueTrips(now);
   await refreshAvailabilities();
+  await sendDailyBookingReminders(now);
 }
 
 let timers: NodeJS.Timeout[] = [];

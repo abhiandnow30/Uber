@@ -61,7 +61,8 @@ export type NotificationPreference =
   | 'emailOnArrived'
   | 'emailOnTripStarted'
   | 'emailOnCompleted'
-  | 'emailOnDelay';
+  | 'emailOnDelay'
+  | 'dailyBookingReminder';
 
 export type EmailInput = {
   idempotencyKey: string;

@@ -52,6 +52,10 @@ export async function syncIndexes() {
     logger.info('Policy updated to company shifts and cab hours');
   }
 
+  // Preferences added later default to on in existing policies (so admins can also switch them off).
+  const added = await policies.updateOne({ key: 'global', 'notifications.dailyBookingReminder': { $exists: false } }, { $set: { 'notifications.dailyBookingReminder': true } });
+  if (added.modifiedCount) invalidatePolicyCache();
+
   // Coordinators are no longer limited by shift.
   await mongoose.connection.db!.collection('coordinators').updateMany({ shifts: { $exists: true } }, { $unset: { shifts: '' } });
 

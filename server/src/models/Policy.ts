@@ -77,6 +77,8 @@ const policySchema = new Schema(
       emailOnTripStarted: { type: Boolean, default: false },
       emailOnCompleted: { type: Boolean, default: true },
       emailOnDelay: { type: Boolean, default: true },
+      // 6 PM email to signed-in employees without a cab for tomorrow.
+      dailyBookingReminder: { type: Boolean, default: true },
     },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },

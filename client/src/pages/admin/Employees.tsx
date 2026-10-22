@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Download, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -20,7 +20,7 @@ import {
   useToast,
   type Column,
 } from '../../components/ui';
-import { download, errorMessage, get, patch, post, qs } from '../../lib/api';
+import { errorMessage, get, patch, post } from '../../lib/api';
 import { fmtDateTime, humanize } from '../../lib/format';
 import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
 import { ACCOUNT_STATUSES, usePolicy } from '../../lib/policy';
@@ -247,9 +247,6 @@ export default function Employees() {
   const [deleting, setDeleting] = useState<EmployeeRow | null>(null);
   const toast = useToast();
 
-  const exportFile = (format: 'csv' | 'xlsx') =>
-    download('/admin/employees/export' + qs({ ...list.filters, q: list.q, format }));
-
   const columns: Column<EmployeeRow>[] = [
     { key: 'employeeId', header: 'Employee ID', sortKey: 'employeeId', render: (e) => <span className="font-mono text-xs">{e.employeeId}</span> },
     {
@@ -311,17 +308,9 @@ export default function Employees() {
         title="Employees"
         subtitle="Employees who can book cabs. New accounts show as Invited until the employee first signs in with Microsoft."
         actions={
-          <>
-            <Button variant="secondary" icon={<Download className="h-4 w-4" />} onClick={() => exportFile('csv')}>
-              Export CSV
-            </Button>
-            <Button variant="secondary" icon={<Download className="h-4 w-4" />} onClick={() => exportFile('xlsx')}>
-              Export Excel
-            </Button>
-            <Button icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(true)}>
-              Add employee
-            </Button>
-          </>
+          <Button icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(true)}>
+            Add employee
+          </Button>
         }
       />
 

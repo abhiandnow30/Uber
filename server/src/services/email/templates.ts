@@ -15,6 +15,7 @@ export const EMAIL_TEMPLATES = [
   'TRIP_STARTED',
   'TRIP_COMPLETED',
   'TRIP_DELAYED',
+  'DAILY_BOOKING_REMINDER',
 ] as const;
 export type EmailTemplate = (typeof EMAIL_TEMPLATES)[number];
 
@@ -209,6 +210,19 @@ export function renderEmail(template: EmailTemplate, p: Params, secret: Record<s
         bookingDetails(p),
       );
       return { subject: `Cab Delay Notice — ${p.reference}`, html, text };
+    }
+    case 'DAILY_BOOKING_REMINDER': {
+      const { html, text } = layout(
+        name,
+        [
+          `Do you need a cab for your shift on ${escapeHtml(p.shiftDate)}? Cabs are arranged only for employees who request them, so please request one for every day you need it.`,
+          ...(p.cutoffTime ? [`Requests for ${escapeHtml(p.shiftDate)} close at ${escapeHtml(p.cutoffTime)} today.`] : []),
+          'If you do not need a cab, you can ignore this email.',
+        ],
+        undefined,
+        ['Request a cab', `${portalUrl()}/employee/request`],
+      );
+      return { subject: `Need a cab for ${p.shiftDate}? Request it today`, html, text };
     }
   }
 }

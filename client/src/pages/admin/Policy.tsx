@@ -81,6 +81,7 @@ const NOTIFICATION_LABELS: Record<string, string> = {
   emailOnTripStarted: 'Trip started',
   emailOnCompleted: 'Trip completed',
   emailOnDelay: 'Delay detected',
+  dailyBookingReminder: 'Daily 6 PM reminder to request tomorrow’s cab',
 };
 
 /** Save helper shared by every section; returns field errors keyed relative to the section. */
