@@ -505,6 +505,7 @@ export function DataTable<T>({
   sort,
   onSort,
   onRowClick,
+  hideHeader,
 }: {
   columns: Column<T>[];
   rows: T[] | undefined;
@@ -516,6 +517,8 @@ export function DataTable<T>({
   sort?: string;
   onSort?: (sort: string) => void;
   onRowClick?: (row: T) => void;
+  /** Leave out the column header row (e.g. small grouped tables whose rows speak for themselves). */
+  hideHeader?: boolean;
 }) {
   if (error) return <ErrorState error={error} onRetry={onRetry} />;
   const sortField = sort?.replace(/^-/, '');
@@ -525,7 +528,7 @@ export function DataTable<T>({
       <CardList columns={columns} rows={rows} rowKey={rowKey} loading={loading} empty={empty} sort={sort} onSort={onSort} onRowClick={onRowClick} />
       <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block">
       <table className="min-w-full divide-y divide-slate-200 text-sm">
-        <thead className="bg-slate-50">
+        <thead className={hideHeader ? 'sr-only' : 'bg-slate-50'}>
           <tr>
             {columns.map((c) => (
               <th key={c.key} scope="col" className={cn('whitespace-nowrap px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500', c.className)} aria-sort={c.sortKey && sortField === c.sortKey ? (desc ? 'descending' : 'ascending') : undefined}>

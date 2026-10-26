@@ -59,6 +59,12 @@ adminRouter.post('/employees', async (req, res) => {
   res.status(201).json(employee);
 });
 
+/** Routes (cab names) already in use, so admins pick an existing one instead of retyping it. */
+adminRouter.get('/employees/routes', async (_req, res) => {
+  const routes = (await Employee.distinct('route', { route: { $nin: [null, ''] }, deletedAt: null })) as string[];
+  res.json(routes.sort((a, b) => a.localeCompare(b)));
+});
+
 adminRouter.get('/employees/export', async (req, res) => {
   const format = String(req.query.format ?? 'csv');
   const f = query(employeeListSchema, req);

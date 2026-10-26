@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Policy, type PolicyAttrs } from '../models/Policy.js';
 import { badRequest, notFound } from '../utils/errors.js';
-import { isValidTimezone, TIME_RE } from '../utils/time.js';
+import { fmt12h, isValidTimezone, TIME_RE } from '../utils/time.js';
 import { audit, type Actor } from './audit.service.js';
 
 export type PolicyView = PolicyAttrs & { _id: unknown };
@@ -149,7 +149,7 @@ export async function updatePolicy(actor: Actor, input: z.infer<typeof policyUpd
   const winEnd = input.booking?.cabWindowEnd ?? current.booking?.cabWindowEnd;
   for (const s of input.shifts ?? current.shifts) {
     if (s.active && s.defaultPickupTime && !inCabWindow(s.defaultPickupTime, winStart, winEnd)) {
-      throw badRequest(`Shift "${s.name}": cab time ${s.defaultPickupTime} is outside the cab hours ${winStart}-${winEnd}`);
+      throw badRequest(`Shift "${s.name}": cab time ${fmt12h(s.defaultPickupTime)} is outside the cab hours ${fmt12h(winStart)} - ${fmt12h(winEnd)}`);
     }
   }
   const set: Record<string, unknown> = { updatedBy: actor.id };

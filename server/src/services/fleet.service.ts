@@ -1,5 +1,7 @@
+import type { ClientSession } from 'mongoose';
 import { z } from 'zod';
 import { withTransaction } from '../db.js';
+import { nextSequence } from '../models/Counter.js';
 import { DRIVER_EMPLOYMENT, VEHICLE_STATUSES, VEHICLE_TYPES } from '../domain.js';
 import { CabAssignment } from '../models/booking.js';
 import { Driver } from '../models/Driver.js';
@@ -9,7 +11,6 @@ import { Vehicle } from '../models/Vehicle.js';
 import { AppError, badRequest, conflict, notFound } from '../utils/errors.js';
 import { escapeRegex, paged, resolveSort, type Pagination } from '../utils/listing.js';
 import { audit, type Actor } from './audit.service.js';
-import { normalizeEmail } from './auth.service.js';
 import { refreshDriverAvailability } from './availability.service.js';
 import { PHONE_RE } from './employee.service.js';
 import { alertOperations } from './alert.service.js';
@@ -22,16 +23,23 @@ const dateStr = z.coerce.date();
 // ===========================================================================
 // Drivers
 // ===========================================================================
+// The Driver ID is generated here, and drivers have no email: they sign in with their mobile number.
 export const driverSchema = z.object({
-  driverCode: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,20}$/, 'Driver ID must be 2-20 letters/digits'),
   fullName: z.string().trim().min(2).max(100),
   phone: z.string().trim().refine((p) => PHONE_RE.test(p), 'Enter a valid phone number'),
-  email: z.union([z.string().trim().email().transform(normalizeEmail), z.literal('')]).optional().default(''),
   licenseNumber: z.string().trim().toUpperCase().min(5).max(30),
   licenseExpiry: dateStr,
   officeLocation: z.string().trim().toUpperCase(),
 });
-export const driverUpdateSchema = driverSchema.omit({ driverCode: true }).partial();
+export const driverUpdateSchema = driverSchema.partial();
+
+/** Next free Driver ID: DRV001, DRV002, … (skips codes already in use, e.g. from seed data). */
+async function nextDriverCode(session: ClientSession) {
+  for (;;) {
+    const code = `DRV${String(await nextSequence('driverCode', session)).padStart(3, '0')}`;
+    if (!(await Driver.exists({ driverCode: code }).session(session))) return code;
+  }
+}
 
 async function assertOffice(code: string) {
   if (!(await activeOfficeCodes()).includes(code)) throw badRequest(`Unknown or inactive office ${code}`);
@@ -44,11 +52,11 @@ export async function createDriver(actor: Actor, input: z.infer<typeof driverSch
   if (input.licenseExpiry < new Date()) throw badRequest('License is already expired');
   await assertPhoneFree(input.phone);
   return withTransaction(async ({ session }) => {
-    if (await Driver.exists({ driverCode: input.driverCode }).session(session)) throw conflict(`Driver ID ${input.driverCode} already exists`);
     if (await Driver.exists({ licenseNumber: input.licenseNumber }).session(session)) throw conflict('A driver with this license number already exists');
-    // The driver's account is created on their first mobile sign-in.
+    // No separate document verification: the coordinator adding the driver vouches for them, so
+    // they can be assigned at once. Their account is created on their first mobile sign-in.
     const [driver] = await Driver.create(
-      [{ ...input, email: input.email || undefined, verificationStatus: 'PENDING', availability: 'OFFLINE', createdBy: actor.id }],
+      [{ ...input, driverCode: await nextDriverCode(session), verificationStatus: 'VERIFIED', verifiedAt: new Date(), verifiedBy: actor.id, availability: 'OFFLINE', createdBy: actor.id }],
       { session },
     );
     await audit(actor, 'DRIVER_CREATED', 'Driver', driver._id, `Driver ${driver.driverCode} (${driver.fullName}) created`, { officeLocation: input.officeLocation }, session);
@@ -77,10 +85,7 @@ export async function updateDriver(actor: Actor, id: string, input: z.infer<type
   }
   if (input.phone && phoneKey(input.phone) !== driver.phoneKey) await assertPhoneFree(input.phone, driver._id);
   const before = driver.toObject();
-  const licenseChanged = (input.licenseNumber && input.licenseNumber !== driver.licenseNumber) || (input.licenseExpiry && +input.licenseExpiry !== +driver.licenseExpiry);
-  driver.set({ ...input, email: input.email === '' ? undefined : (input.email ?? driver.email) });
-  // License details changed: documents must be re-verified before new assignments.
-  if (licenseChanged && driver.verificationStatus === 'VERIFIED') driver.verificationStatus = 'PENDING';
+  driver.set(input);
   try {
     await driver.save();
   } catch (err) {
@@ -90,7 +95,6 @@ export async function updateDriver(actor: Actor, id: string, input: z.infer<type
   if (input.fullName || input.phone) await User.updateOne({ _id: driver.user }, { $set: { name: driver.fullName, phone: driver.phone } });
   await audit(actor, 'DRIVER_UPDATED', 'Driver', driver._id, `Driver ${driver.driverCode} updated`, {
     changes: Object.fromEntries(Object.keys(input).map((k) => [k, { from: (before as Record<string, unknown>)[k], to: (input as Record<string, unknown>)[k] }])),
-    reverificationRequired: licenseChanged,
   });
   return driver;
 }

@@ -5,6 +5,7 @@ import { Coordinator } from '../models/Coordinator.js';
 import { User } from '../models/User.js';
 import { emitToOperations, emitToUser } from '../realtime.js';
 import { AppError } from '../utils/errors.js';
+import { fmt12h } from '../utils/time.js';
 import type { Actor } from './audit.service.js';
 import { notifyInApp } from './notification.service.js';
 
@@ -90,7 +91,7 @@ export function bookingEmailParams(b: { reference: string; travelDate: string; p
     name,
     reference: b.reference,
     travelDate: b.travelDate,
-    pickupTime: b.pickupTime,
+    pickupTime: fmt12h(b.pickupTime),
     pickupLocation: b.pickupLocation,
     destination: b.dropLocation,
   };

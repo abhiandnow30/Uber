@@ -14,7 +14,7 @@ import { User } from '../models/User.js';
 import { decrypt } from '../utils/crypto.js';
 import { AppError, badRequest, forbidden, notFound, validationError } from '../utils/errors.js';
 import { escapeRegex, paged, resolveSort, type Pagination } from '../utils/listing.js';
-import { addMinutes, DATE_RE, localToUtc, TIME_RE } from '../utils/time.js';
+import { addMinutes, DATE_RE, fmt12h, localToUtc, TIME_RE } from '../utils/time.js';
 import { audit, type Actor } from './audit.service.js';
 import { refreshDriverAvailability } from './availability.service.js';
 import { alertOperations } from './alert.service.js';
@@ -25,12 +25,18 @@ import { assertBookingInScope, assertInScope, bookingScope, bookingScopeFilter }
 
 export const createBookingSchema = z.object({
   travelDate: z.string().regex(DATE_RE, 'Use YYYY-MM-DD'),
-  // Ignored when the shift fixes the cab time.
+  // Ignored when the shift has hours (the cab time then follows from the shift times).
   pickupTime: z.string().regex(TIME_RE, 'Use HH:mm (24h)').optional(),
-  // The employee changed the shift's cab time for this ride (e.g. leaving an hour after the shift ends).
-  changedPickupTime: z.string().regex(TIME_RE, 'Use HH:mm (24h)').optional(),
-  pickupLocation: z.string().trim().min(3, 'Pickup location is required').max(300),
-  dropLocation: z.string().trim().min(3, 'Drop-off location is required').max(300),
+  // The employee's shift times for this day, when they differ from the usual ones (e.g. 10 PM - 7 AM
+  // instead of 9 PM - 6 AM). They decide whether the cab is IN or OUT; see cabForShift.
+  shiftStart: z.string().regex(TIME_RE, 'Use HH:mm (24h)').optional(),
+  shiftEnd: z.string().regex(TIME_RE, 'Use HH:mm (24h)').optional(),
+  // Only needed when the shift times allow both an IN and an OUT cab.
+  direction: z.enum(['IN', 'OUT']).optional(),
+  // Employees aren't asked for the route: when left out it is the saved home address and the
+  // office, in the shift's direction. The transport team plans the actual cab route.
+  pickupLocation: z.string().trim().min(3, 'Pickup location is required').max(300).optional(),
+  dropLocation: z.string().trim().min(3, 'Drop-off location is required').max(300).optional(),
   passengers: z.coerce.number().int().min(1).max(60).default(1),
   tripType: z.enum(['ONE_WAY', 'ROUND_TRIP']).default('ONE_WAY'),
   returnPickupTime: z.string().regex(TIME_RE).optional(),
@@ -40,6 +46,24 @@ export const createBookingSchema = z.object({
   notes: z.string().trim().max(500).optional().default(''),
   clientRequestId: z.string().uuid('clientRequestId must be a UUID'),
 });
+
+/** IN cabs need time for the pickup run, so the shift must start at least this long after cab hours begin. */
+export const IN_LEAD_MINUTES = 60;
+
+/**
+ * Which cab a shift gets, from its start/end times and the cab hours (e.g. 8 PM - 6 AM):
+ *  - IN  (home → office) when the shift starts between cab-hours start + 1 h and cab-hours end;
+ *        the employee must reach the office by the start, the transport team sets the pickup.
+ *  - OUT (office → home) when the shift ends within cab hours, before they end; the cab leaves at the end.
+ * Without cab hours both are possible. Returns the options; the caller picks or rejects.
+ */
+export function cabForShift(start: string, end: string, winStart?: string | null, winEnd?: string | null) {
+  if (!winStart || !winEnd) return { in: true, out: true };
+  const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const span = (toMin(winEnd) - toMin(winStart) + 1440) % 1440 || 1440;
+  const offset = (t: string) => (toMin(t) - toMin(winStart) + 1440) % 1440;
+  return { in: offset(start) >= IN_LEAD_MINUTES && offset(start) <= span, out: offset(end) < span };
+}
 
 /**
  * Date of a shift's cab. The shift's own cab time is on the next day when it is before the shift
@@ -68,10 +92,66 @@ async function validateBookingWindow(input: { travelDate: string; pickupTime: st
   const cutoff = policy.booking?.dailyCutoffTime;
   if (cutoff) {
     const deadline = DateTime.fromISO(`${input.travelDate}T${cutoff}`, { zone: timezone }).minus({ days: 1 });
-    if (now > deadline) throw new AppError(422, 'BOOKING_CUTOFF', `Bookings for ${input.travelDate} closed at ${cutoff} on the previous day`);
+    if (now > deadline) throw new AppError(422, 'BOOKING_CUTOFF', `Bookings for ${input.travelDate} closed at ${fmt12h(cutoff)} on the previous day`);
   }
   return scheduled;
 }
+
+/**
+ * The work day a cab belongs to when no shift says so. With cab hours crossing midnight
+ * (8 PM - 6 AM), a cab up to the end of those hours counts for the previous day.
+ */
+export function workDayOf(travelDate: string, pickupTime: string, winStart?: string | null, winEnd?: string | null) {
+  const overnight = !!winStart && !!winEnd && winStart > winEnd;
+  return overnight && pickupTime <= winEnd! ? DateTime.fromISO(travelDate).minus({ days: 1 }).toFormat('yyyy-MM-dd') : travelDate;
+}
+
+/** Bookings of a work day. Bookings made before workDay was stored fall back to their shift date, then travel date. */
+export function workDayMatch(day: string) {
+  return {
+    $or: [
+      { workDay: day },
+      { workDay: { $exists: false }, shiftDate: day },
+      { workDay: { $exists: false }, shiftDate: { $exists: false }, travelDate: day },
+    ],
+  };
+}
+
+/** The current work day in an office zone (runs until the end of overnight cab hours). */
+export async function currentWorkDay(timezone?: string) {
+  const policy = await getPolicy();
+  const now = DateTime.now().setZone(timezone ?? policy.officeLocations[0]?.timezone ?? 'Asia/Kolkata');
+  return workDayOf(now.toFormat('yyyy-MM-dd'), now.toFormat('HH:mm'), policy.booking?.cabWindowStart, policy.booking?.cabWindowEnd);
+}
+
+/** Has the employee a cab (not cancelled or rejected) for this work day? */
+async function hasCabForDay(userId: string, shiftDay: string) {
+  return !!(await CabRequest.exists({
+    employeeUser: userId,
+    $or: [
+      { shiftDayKey: { $in: [`${userId}:${shiftDay}:OUTBOUND`, `${userId}:${shiftDay}:RETURN`] } },
+      // bookings made before shiftDayKey existed
+      {
+        shiftDayKey: { $exists: false },
+        status: { $nin: ['CANCELLED', 'REJECTED'] },
+        $or: [{ shiftDate: shiftDay }, { shiftDate: { $exists: false }, travelDate: shiftDay }],
+      },
+    ],
+  }));
+}
+
+/** Has the employee already got a cab for the current work day (which runs until the end of cab hours)? */
+export async function hasCabForCurrentWorkDay(userId: string, officeCode: string) {
+  const policy = await getPolicy();
+  return hasCabForDay(userId, await currentWorkDay(policy.officeLocations.find((o) => o.code === officeCode)?.timezone));
+}
+
+const shiftDayTaken = (shiftDay: string) =>
+  new AppError(
+    409,
+    'SHIFT_DAY_BOOKED',
+    `You already have a cab for your shift on ${DateTime.fromISO(shiftDay).toFormat('ccc, d LLL')}. Only one cab is allowed per shift day; cancel that request first if you need to change it.`,
+  );
 
 async function makeReference(session: mongoose.ClientSession, travelDate: string) {
   const ymd = travelDate.replace(/-/g, '').slice(2);
@@ -100,37 +180,85 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
   const shift = input.shift ? policy.shifts.find((s) => s.code === input.shift && s.active) : undefined;
   if (input.shift && !shift) throw badRequest('Select a valid shift');
   if (!shift && policy.booking?.requireShift) throw validationError('Select your shift', { fields: { shift: 'Select your shift' } });
-  // A shift with hours sets the cab time (the employee may change it); see shiftCabDate for the date.
+  // IN (home → office) or OUT (office → home). Without a shift the default route is home → office.
+  let direction: 'IN' | 'OUT' = shift?.direction === 'FROM_OFFICE' ? 'OUT' : 'IN';
   let travelDate = input.travelDate;
   let pickupTime = input.pickupTime ?? '';
   let shiftDate: string | undefined;
-  if (shift?.startTime && shift.defaultPickupTime) {
+  let shiftStart: string | undefined;
+  let shiftEnd: string | undefined;
+  let reportBy: string | undefined;
+  let pickupTimeSet = true;
+  if (shift?.startTime && shift.endTime) {
+    // The employee may enter different shift times for this day (10 PM - 7 AM instead of 9 PM - 6 AM);
+    // the times then decide the cab: IN to reach the office by the start, or OUT leaving at the end.
     shiftDate = input.travelDate;
-    pickupTime = input.changedPickupTime || shift.defaultPickupTime;
+    shiftStart = input.shiftStart ?? shift.startTime;
+    shiftEnd = input.shiftEnd ?? shift.endTime;
+    if (shiftStart === shiftEnd) throw validationError('The shift must end at a different time from when it starts', { fields: { shiftEnd: 'Must differ from the start' } });
+    const can = cabForShift(shiftStart, shiftEnd, policy.booking?.cabWindowStart, policy.booking?.cabWindowEnd);
+    if (!can.in && !can.out) {
+      const ws = policy.booking?.cabWindowStart;
+      const we = policy.booking?.cabWindowEnd;
+      const inFrom = DateTime.fromFormat(ws!, 'HH:mm').plus({ minutes: IN_LEAD_MINUTES }).toFormat('HH:mm');
+      throw new AppError(422, 'NO_CAB_FOR_SHIFT', `No cab for a ${fmt12h(shiftStart)} - ${fmt12h(shiftEnd)} shift. Cabs take you to the office for shifts starting ${fmt12h(inFrom)} - ${fmt12h(we)}, or home for shifts ending ${fmt12h(ws)} - before ${fmt12h(we)}.`, {
+        fields: { shiftStart: 'No cab for these hours' },
+      });
+    }
+    if (can.in && can.out) direction = input.direction ?? direction;
+    else direction = can.in ? 'IN' : 'OUT';
+    if (direction === 'IN') {
+      // The start is when they must reach the office; the transport team sets the pickup when assigning.
+      reportBy = shiftStart;
+      pickupTime = shiftStart;
+      pickupTimeSet = false;
+      travelDate = shiftDate;
+    } else {
+      // The cab leaves the office when the shift ends (the next day when it ends after midnight).
+      pickupTime = shiftEnd;
+      travelDate = shiftEnd < shiftStart ? DateTime.fromISO(shiftDate).plus({ days: 1 }).toFormat('yyyy-MM-dd') : shiftDate;
+    }
+  } else if (shift?.startTime && shift.defaultPickupTime) {
+    // Shift with a cab time but no end (older setups): the shift's own cab time.
+    shiftDate = input.travelDate;
+    pickupTime = shift.defaultPickupTime;
     travelDate = shiftCabDate(shift.startTime, shift.defaultPickupTime, shiftDate, pickupTime);
   }
   if (!pickupTime) throw validationError('Choose a pickup time', { fields: { pickupTime: 'Choose a pickup time' } });
   const winStart = policy.booking?.cabWindowStart;
   const winEnd = policy.booking?.cabWindowEnd;
   if (!inCabWindow(pickupTime, winStart, winEnd)) {
-    throw new AppError(422, 'OUTSIDE_CAB_HOURS', `Cabs run only between ${winStart} and ${winEnd}`);
+    throw new AppError(422, 'OUTSIDE_CAB_HOURS', `Cabs run only between ${fmt12h(winStart)} and ${fmt12h(winEnd)}`);
   }
   if (input.passengers > (policy.booking?.maxPassengers ?? 4)) {
     throw new AppError(422, 'PASSENGER_LIMIT', `A booking can include at most ${policy.booking?.maxPassengers} passengers`);
   }
-  if (input.pickupLocation.toLowerCase() === input.dropLocation.toLowerCase()) throw badRequest('Pickup and drop-off locations must differ');
+  let pickupLocation = input.pickupLocation;
+  let dropLocation = input.dropLocation;
+  if (!pickupLocation || !dropLocation) {
+    const home = employee.homeAddress?.trim();
+    if (!home) throw new AppError(422, 'HOME_ADDRESS_REQUIRED', 'Add your present address to your account before requesting a cab.');
+    const officeText = office.address ? `${office.name}, ${office.address}` : office.name;
+    const fromOffice = direction === 'OUT';
+    pickupLocation ||= fromOffice ? officeText : home;
+    dropLocation ||= fromOffice ? home : officeText;
+  }
+  if (pickupLocation.toLowerCase() === dropLocation.toLowerCase()) throw badRequest('Pickup and drop-off locations must differ');
   if (input.tripType === 'ROUND_TRIP') {
     if (!policy.booking?.allowRoundTrip) throw badRequest('Round-trip bookings are not enabled');
     if (!input.returnPickupTime || input.returnPickupTime <= pickupTime) throw badRequest('Return pickup time must be later than the outbound pickup time');
   }
   const scheduled = await validateBookingWindow({ travelDate, pickupTime }, office.timezone);
+  // One cab per shift day: a 7 PM shift's 1 AM cab belongs to the day the shift started.
+  const shiftDay = shiftDate ?? workDayOf(travelDate, pickupTime, winStart, winEnd);
+  if (await hasCabForDay(actor.id, shiftDay)) throw shiftDayTaken(shiftDay);
   const legs: Array<{ leg: 'OUTBOUND' | 'RETURN'; pickupTime: string; scheduled: Date; pickup: string; drop: string }> = [
-    { leg: 'OUTBOUND', pickupTime, scheduled, pickup: input.pickupLocation, drop: input.dropLocation },
+    { leg: 'OUTBOUND', pickupTime, scheduled, pickup: pickupLocation, drop: dropLocation },
   ];
   if (input.tripType === 'ROUND_TRIP') {
     const ret = localToUtc(travelDate, input.returnPickupTime!, office.timezone);
     if (!ret) throw badRequest('Invalid return pickup time');
-    legs.push({ leg: 'RETURN', pickupTime: input.returnPickupTime!, scheduled: ret, pickup: input.dropLocation, drop: input.pickupLocation });
+    legs.push({ leg: 'RETURN', pickupTime: input.returnPickupTime!, scheduled: ret, pickup: dropLocation, drop: pickupLocation });
   }
   const approvalRequired = !!policy.booking?.approvalRequired;
   const status: BookingStatus = approvalRequired ? 'PENDING_APPROVAL' : 'REQUESTED';
@@ -152,6 +280,11 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
               dropLocation: leg.drop,
               travelDate,
               shiftDate,
+              direction: leg.leg === 'RETURN' ? (direction === 'IN' ? 'OUT' : 'IN') : direction,
+              shiftStart,
+              shiftEnd,
+              reportBy: leg.leg === 'OUTBOUND' ? reportBy : undefined,
+              pickupTimeSet: leg.leg === 'OUTBOUND' ? pickupTimeSet : true,
               pickupTime: leg.pickupTime,
               timezone: office.timezone,
               scheduledPickupAt: leg.scheduled,
@@ -166,6 +299,8 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
               // the return leg reuses the request id with a suffix to stay idempotent
               clientRequestId: leg.leg === 'OUTBOUND' ? input.clientRequestId : `${input.clientRequestId}:return`,
               openSlotKey: `${actor.id}:${leg.scheduled.toISOString()}`,
+              shiftDayKey: `${actor.id}:${shiftDay}:${leg.leg}`,
+              workDay: shiftDay,
             },
           ],
           { session: tx.session },
@@ -183,7 +318,7 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
         await notifyCoordinators(tx, office.code, {
           type: 'BOOKING_CREATED',
           title: approvalRequired ? 'Cab request awaiting approval' : 'New cab request',
-          body: `${employee.fullName} · ${b.reference} · ${b.travelDate} ${b.pickupTime}`,
+          body: `${employee.fullName} · ${b.reference} · ${b.travelDate} ${fmt12h(b.pickupTime)}`,
           data: { bookingId: String(b._id), reference: b.reference },
           idempotencyKey: `booking-created:${b._id}`,
         });
@@ -198,6 +333,7 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
     if (isDuplicateKeyError(err)) {
       const again = await CabRequest.findOne({ employeeUser: actor.id, clientRequestId: input.clientRequestId }).lean();
       if (again) return { booking: again, duplicate: true };
+      if (err.keyPattern?.shiftDayKey) throw shiftDayTaken(shiftDay);
       throw new AppError(409, 'DUPLICATE_BOOKING', 'You already have an open booking for this pickup time');
     }
     throw err;
@@ -274,7 +410,7 @@ export async function cancelMyBooking(actor: Actor, id: string, reason: string) 
       422,
       'CANCELLATION_NOT_ALLOWED',
       CANCELLATION_REQUESTABLE.includes(booking.status as BookingStatus)
-        ? 'A cab is already assigned, so this booking can no longer be cancelled directly. Send a cancellation request to the transport team instead.'
+        ? 'A cab is already assigned, so this booking can no longer be cancelled directly. Send a cancellation request to the admin instead.'
         : `This booking is ${booking.status} and can no longer be cancelled`,
     );
   }
@@ -293,7 +429,7 @@ export async function requestCancellation(actor: Actor, id: string, reason: stri
     if (!updated) {
       const b = await CabRequest.findOne({ _id: id, employeeUser: actor.id }).session(tx.session).lean();
       if (!b) throw notFound('Booking');
-      if (b.cancellationRequest?.status === 'PENDING') throw new AppError(409, 'ALREADY_REQUESTED', 'You have already asked to cancel this booking. The transport team will respond soon.');
+      if (b.cancellationRequest?.status === 'PENDING') throw new AppError(409, 'ALREADY_REQUESTED', 'You have already asked to cancel this booking. The admin will respond soon.');
       throw new AppError(422, 'CANCELLATION_NOT_ALLOWED', EMPLOYEE_CANCELLABLE.includes(b.status as BookingStatus) ? 'No cab is assigned yet: you can cancel this booking directly.' : `This booking is ${b.status} and can no longer be cancelled`);
     }
     const notice = {
@@ -354,7 +490,7 @@ export async function cancelBookingInternal(actor: Actor, bookingId: unknown, re
       event: wasInProgress ? 'TRIP_INTERRUPTED' : 'CANCELLED',
       reason,
       set: { cancelledBy: actor.id, cancelledByRole: actor.role, cancellationReason: reason, cancelledAt: new Date(), ...extraSet },
-      unset: ['openSlotKey'],
+      unset: ['openSlotKey', 'shiftDayKey'],
     });
     await endActiveAssignment(tx, updated, 'CANCELLED', actor, reason);
     const employee = await Employee.findById(updated.employee).session(tx.session).lean();
@@ -437,6 +573,8 @@ export async function endActiveAssignment(
 // Coordinator / admin booking management
 // ---------------------------------------------------------------------------
 export const bookingListSchema = z.object({
+  // Work day (shift day): a 7 PM shift's 4 AM cab belongs to the day the shift started.
+  workDay: z.string().regex(DATE_RE).optional(),
   date: z.string().regex(DATE_RE).optional(),
   dateFrom: z.string().regex(DATE_RE).optional(),
   dateTo: z.string().regex(DATE_RE).optional(),
@@ -458,7 +596,8 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
     assertInScope(scope.offices, f.officeLocation);
     match.officeLocation = f.officeLocation;
   }
-  if (f.date) match.travelDate = f.date;
+  if (f.workDay) Object.assign(match, workDayMatch(f.workDay));
+  else if (f.date) match.travelDate = f.date;
   else if (f.dateFrom || f.dateTo) match.travelDate = { ...(f.dateFrom ? { $gte: f.dateFrom } : {}), ...(f.dateTo ? { $lte: f.dateTo } : {}) };
   if (f.shift) match.shift = f.shift;
   if (f.status) match.status = { $in: f.status.split(',').map((s) => s.trim().toUpperCase()) };
@@ -470,7 +609,7 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
   const sort = resolveSort(p.sort, ['scheduledPickupAt', 'reference', 'status', 'createdAt', 'travelDate'], { scheduledPickupAt: 1, _id: 1 });
   const pipeline: PipelineStage[] = [
     { $match: match },
-    { $lookup: { from: 'employees', localField: 'employee', foreignField: '_id', as: 'emp', pipeline: [{ $project: { fullName: 1, employeeId: 1, email: 1, phone: 1 } }] } },
+    { $lookup: { from: 'employees', localField: 'employee', foreignField: '_id', as: 'emp', pipeline: [{ $project: { fullName: 1, employeeId: 1, email: 1, phone: 1, route: 1 } }] } },
     { $unwind: { path: '$emp', preserveNullAndEmptyArrays: true } },
     { $lookup: { from: 'cabassignments', localField: 'currentAssignment', foreignField: '_id', as: 'asg' } },
     { $unwind: { path: '$asg', preserveNullAndEmptyArrays: true } },
@@ -479,7 +618,7 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
   if (f.vehicleId && mongoose.isValidObjectId(f.vehicleId)) pipeline.push({ $match: { 'asg.vehicle': new mongoose.Types.ObjectId(f.vehicleId) } });
   if (p.q) {
     const rx = new RegExp(escapeRegex(p.q), 'i');
-    pipeline.push({ $match: { $or: [{ reference: rx }, { 'emp.fullName': rx }, { 'emp.employeeId': rx }, { pickupLocation: rx }, { dropLocation: rx }] } });
+    pipeline.push({ $match: { $or: [{ reference: rx }, { 'emp.fullName': rx }, { 'emp.employeeId': rx }, { 'emp.route': rx }, { pickupLocation: rx }, { dropLocation: rx }] } });
   }
   pipeline.push(
     { $lookup: { from: 'drivers', localField: 'asg.driver', foreignField: '_id', as: 'drv', pipeline: [{ $project: { fullName: 1, driverCode: 1, phone: 1 } }] } },
@@ -505,8 +644,9 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
             $project: {
               reference: 1, status: 1, travelDate: 1, pickupTime: 1, scheduledPickupAt: 1, timezone: 1, pickupLocation: 1, dropLocation: 1,
               passengers: 1, shift: 1, tripType: 1, leg: 1, officeLocation: 1, notes: 1, isDelayed: 1, delayReason: 1, flaggedForReview: 1, flagReason: 1, cancellationRequest: 1, createdAt: 1,
+              direction: 1, reportBy: 1, pickupTimeSet: 1, shiftStart: 1, shiftEnd: 1,
               employee: '$emp',
-              assignment: { _id: '$asg._id', acknowledgedAt: '$asg.acknowledgedAt', status: '$asg.status' },
+              assignment: { _id: '$asg._id', acknowledgedAt: '$asg.acknowledgedAt', status: '$asg.status', tripId: '$asg.tripId', tripName: '$asg.tripName' },
               driver: { $first: '$drv' },
               vehicle: { $first: '$veh' },
               notification: { $first: '$mail' },
@@ -571,7 +711,7 @@ export async function rejectBooking(actor: Actor, id: string, reason: string) {
       event: 'REJECTED',
       reason,
       set: { rejectedBy: actor.id, rejectionReason: reason },
-      unset: ['openSlotKey'],
+      unset: ['openSlotKey', 'shiftDayKey'],
     });
     const emp = await Employee.findById(updated.employee).session(tx.session).lean();
     if (emp) {

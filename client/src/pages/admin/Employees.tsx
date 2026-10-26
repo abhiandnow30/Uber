@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -58,6 +58,7 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const routes = useQuery({ queryKey: ['admin-employees', 'routes'], queryFn: () => get<string[]>('/admin/employees/routes'), enabled: open });
 
   useEffect(() => {
     if (!open) return;
@@ -187,7 +188,21 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
               </option>
             ))}
           </Select>
-          <Input label="Route" maxLength={120} value={form.route} onChange={set('route')} error={errors.route} hint='Cab route / pickup zone, e.g. "LB Nagar Cab"' />
+          <Input
+            label="Route (cab)"
+            list="employee-routes"
+            maxLength={120}
+            value={form.route}
+            onChange={set('route')}
+            error={errors.route}
+            placeholder="Unknown"
+            hint={'Set by you from the employee\'s address. Pick an existing cab or type a new one, e.g. "LB Nagar Cab".'}
+          />
+          <datalist id="employee-routes">
+            {(routes.data ?? []).map((r) => (
+              <option key={r} value={r} />
+            ))}
+          </datalist>
           <Input
             label="Present address"
             className="sm:col-span-2"
@@ -261,7 +276,7 @@ export default function Employees() {
     },
     { key: 'email', header: 'Email', sortKey: 'email', render: (e) => e.email },
     { key: 'office', header: 'Office', sortKey: 'officeLocation', render: (e) => e.officeLocation || '—' },
-    { key: 'route', header: 'Route', sortKey: 'route', render: (e) => e.route || '—' },
+    { key: 'route', header: 'Route', sortKey: 'route', render: (e) => e.route || <span className="text-slate-400">Unknown</span> },
     { key: 'status', header: 'Status', render: (e) => <StatusBadge status={e.status} /> },
     { key: 'lastLogin', header: 'Last login', render: (e) => <span className="whitespace-nowrap">{fmtDateTime(e.lastLoginAt)}</span> },
     {

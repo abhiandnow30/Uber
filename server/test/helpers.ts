@@ -155,13 +155,12 @@ export async function makeEmployee(opts: { office?: string; email?: string; empl
 
 let phoneSeq = 0;
 
-/** Drivers sign in with their mobile number and the last 4 characters of their linked vehicle. */
-export async function driverLogin(phone: string, vehicleNumber: string): Promise<Client> {
+/** Drivers sign in with their mobile number; the password is its first 4 digits (of the 10-digit number). */
+export const driverPassword = (phone: string) => phone.replace(/\D/g, '').slice(-10).slice(0, 4);
+
+export async function driverLogin(phone: string): Promise<Client> {
   const agent = request.agent(app);
-  const res = await agent
-    .post('/api/auth/driver-login')
-    .set('X-Requested-With', 'XMLHttpRequest')
-    .send({ phone, vehicleLast4: vehicleNumber.replace(/[^a-z0-9]/gi, '').slice(-4) });
+  const res = await agent.post('/api/auth/driver-login').set('X-Requested-With', 'XMLHttpRequest').send({ phone, password: driverPassword(phone) });
   if (res.status !== 200) throw new Error(`Driver sign-in failed for ${phone}: ${res.status} ${JSON.stringify(res.body)}`);
   return wrap(agent, res.body.csrfToken);
 }
@@ -195,7 +194,7 @@ export async function makeDriver(opts: { office?: string; capacity?: number; ver
     currentVehicle: vehicle._id,
   });
   await DriverVehicleLink.create({ driver: driver._id, vehicle: vehicle._id, linkedBy: user._id });
-  return { user, driver, vehicle, client: await driverLogin(phone, vehicle.registrationNumber) };
+  return { user, driver, vehicle, client: await driverLogin(phone) };
 }
 
 export function futureDate(days = 1, tz = 'Asia/Kolkata') {

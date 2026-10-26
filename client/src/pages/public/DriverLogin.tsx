@@ -5,12 +5,12 @@ import { ApiError, post } from '../../lib/api';
 import { homeFor, useAuth } from '../../lib/auth';
 import AuthShell from './AuthShell';
 
-/** Drivers sign in with the mobile number the coordinator registered and their vehicle number. */
+/** Drivers sign in with the mobile number the coordinator registered; the password is its first 4 digits. */
 export default function DriverLogin() {
   const { refresh } = useAuth();
   const navigate = useNavigate();
   const [phone, setPhone] = useState('');
-  const [last4, setLast4] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -19,7 +19,7 @@ export default function DriverLogin() {
     setBusy(true);
     setError('');
     try {
-      await post('/auth/driver-login', { phone, vehicleLast4: last4 });
+      await post('/auth/driver-login', { phone, password });
       const me = (await refresh()) as { data?: { user: { role: Parameters<typeof homeFor>[0] } } };
       navigate(me.data ? homeFor(me.data.user.role) : '/driver', { replace: true });
     } catch (err) {
@@ -36,20 +36,21 @@ export default function DriverLogin() {
       footer={<Link to="/login" className="text-indigo-600 hover:underline">Not a driver? Back to sign in</Link>}
     >
       <form onSubmit={submit} className="space-y-4" noValidate>
-        <Input label="Mobile number" type="tel" inputMode="tel" autoComplete="tel" placeholder="e.g. 98765 43210" value={phone} onChange={(e) => setPhone(e.target.value)} required />
+        <Input label="Mobile number" type="tel" inputMode="tel" autoComplete="username" placeholder="e.g. 98765 43210" value={phone} onChange={(e) => setPhone(e.target.value)} required />
         <Input
-          label="Last 4 characters of your vehicle number"
-          inputMode="text"
-          autoComplete="off"
-          placeholder="e.g. 1234"
+          label="Password"
+          type="password"
+          inputMode="numeric"
+          autoComplete="current-password"
+          placeholder="4 digits"
           maxLength={4}
-          value={last4}
-          onChange={(e) => setLast4(e.target.value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 4))}
-          hint="For TS09AB1234, enter 1234"
+          value={password}
+          onChange={(e) => setPassword(e.target.value.replace(/\D/g, '').slice(0, 4))}
+          hint="The first 4 digits of your mobile number"
           required
         />
         {error && <Alert tone="error">{error}</Alert>}
-        <Button type="submit" size="lg" className="w-full" loading={busy} disabled={phone.replace(/\D/g, '').length < 10 || last4.length !== 4}>
+        <Button type="submit" size="lg" className="w-full" loading={busy} disabled={phone.replace(/\D/g, '').length < 10 || password.length !== 4}>
           Sign in
         </Button>
       </form>

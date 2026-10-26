@@ -97,7 +97,7 @@ describe('in-app notifications and real-time delivery', () => {
     initRealtime(server);
     await new Promise<void>((r) => server!.listen(0, r));
     const port = (server.address() as AddressInfo).port;
-    const loginRes = await request(app).post('/api/auth/driver-login').set('X-Requested-With', 'XMLHttpRequest').send({ phone: s.drv.driver.phone, vehicleLast4: s.drv.vehicle.registrationNumber.slice(-4) });
+    const loginRes = await request(app).post('/api/auth/driver-login').set('X-Requested-With', 'XMLHttpRequest').send({ phone: s.drv.driver.phone, password: s.drv.driver.phone.replace(/\D/g, '').slice(-10).slice(0, 4) });
     const header = (loginRes.headers['set-cookie'] as unknown as string[]).map((c) => c.split(';')[0]).join('; ');
     const socket = ioClient(`http://127.0.0.1:${port}`, { extraHeaders: { cookie: header }, transports: ['websocket'] });
     await new Promise<void>((resolve, reject) => {

@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, PageHeader, Spinner, StatusBadge, useToast } from '../../components/ui';
 import { ApiError, get, post } from '../../lib/api';
-import { fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
+import { pickupLabel } from '../../lib/policy';
 
 type HistoryEntry = { _id: string; from?: string; to: string; event: string; reason?: string; actorRole?: string; createdAt: string };
 
@@ -14,6 +15,9 @@ type BookingDetail = {
   status: string;
   travelDate: string;
   pickupTime: string;
+  direction?: 'IN' | 'OUT';
+  reportBy?: string;
+  pickupTimeSet?: boolean;
   timezone: string;
   officeLocation: string;
   scheduledPickupAt: string;
@@ -50,9 +54,9 @@ type BookingDetail = {
 };
 
 const ACTIVE = ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'];
-const PRE_START = ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'];
+export const PRE_START = ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'];
 
-function PinCard({ pin, tz }: { pin: { code: string; expiresAt: string }; tz: string }) {
+export function PinCard({ pin, tz }: { pin: { code: string; expiresAt: string }; tz: string }) {
   const toast = useToast();
   const [shown, setShown] = useState(false);
   const copy = async () => {
@@ -125,7 +129,7 @@ export default function MyBookingDetail() {
 
   const requestCancellation = async (reason: string) => {
     await post(`/me/bookings/${b._id}/cancellation-request`, { reason });
-    toast.success('Cancellation requested', 'The transport team will review it and let you know.');
+    toast.success('Cancellation requested', 'The admin will review it and let you know.');
     qc.invalidateQueries({ queryKey: ['my-bookings'] });
   };
   const cr = b.cancellationRequest;
@@ -191,7 +195,8 @@ export default function MyBookingDetail() {
           <DescriptionList
             items={[
               ['Date', fmtTravelDate(b.travelDate)],
-              ['Pickup time', `${b.pickupTime} (${tz})`],
+              ...(b.direction === 'IN' && b.reportBy ? ([['Reach office by', fmt12h(b.reportBy)]] as Array<[string, string]>) : []),
+              ['Pickup time', b.direction === 'IN' && b.pickupTimeSet === false ? 'Set by the transport team when your cab is assigned' : `${fmt12h(b.pickupTime)} (${tz})`],
               ['Pickup', b.pickupLocation],
               ['Destination', b.dropLocation],
               ['Passengers', b.passengers],
@@ -214,7 +219,7 @@ export default function MyBookingDetail() {
               </div>
             ) : cr?.status === 'PENDING' ? (
               <Alert tone="info" title="Cancellation requested">
-                You asked to cancel this ride{cr.requestedAt ? ` on ${fmtDateTime(cr.requestedAt, tz)}` : ''}: “{cr.reason}”. The transport team will review it and notify you. Until then the ride stays booked.
+                You asked to cancel this ride{cr.requestedAt ? ` on ${fmtDateTime(cr.requestedAt, tz)}` : ''}: “{cr.reason}”. The admin will review it and notify you. Until then the ride stays booked.
               </Alert>
             ) : b.canRequestCancellation ? (
               <div className="space-y-3">
@@ -224,7 +229,7 @@ export default function MyBookingDetail() {
                   </Alert>
                 )}
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm text-slate-600">A cab is already assigned. If your plans have changed, ask the transport team to cancel it.</p>
+                  <p className="text-sm text-slate-600">A cab is already assigned. If your plans have changed, ask the admin to cancel it.</p>
                   <Button variant="danger" onClick={() => setRequestOpen(true)}>
                     Request cancellation
                   </Button>
@@ -265,7 +270,7 @@ export default function MyBookingDetail() {
         message={
           <>
             <p>
-              {b.reference} · {fmtTravelDate(b.travelDate)} at {b.pickupTime}
+              {b.reference} · {fmtTravelDate(b.travelDate)} · {pickupLabel(b)}
             </p>
             <p className="mt-1 text-slate-500">This cannot be undone.</p>
           </>
@@ -281,9 +286,9 @@ export default function MyBookingDetail() {
         message={
           <>
             <p>
-              {b.reference} · {fmtTravelDate(b.travelDate)} at {b.pickupTime}
+              {b.reference} · {fmtTravelDate(b.travelDate)} · {pickupLabel(b)}
             </p>
-            <p className="mt-1 text-slate-500">A cab is already assigned, so the transport team decides. The ride stays booked until they approve your request.</p>
+            <p className="mt-1 text-slate-500">A cab is already assigned, so the admin decides. The ride stays booked until they approve your request.</p>
           </>
         }
         confirmLabel="Send request"

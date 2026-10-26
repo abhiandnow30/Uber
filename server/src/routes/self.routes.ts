@@ -3,13 +3,13 @@ import { z } from 'zod';
 import { actorFromRequest, requireRole } from '../middleware/auth.js';
 import { body, objectId, pinLimiter, query } from '../middleware/common.js';
 import { CabRequest } from '../models/booking.js';
+import { Employee } from '../models/Employee.js';
 import { Notification } from '../models/system.js';
-import { cancelMyBooking, createBooking, createBookingSchema, getMyBooking, listMyBookings, requestCancellation } from '../services/booking.service.js';
+import { cancelMyBooking, createBooking, createBookingSchema, getMyBooking, hasCabForCurrentWorkDay, listMyBookings, requestCancellation } from '../services/booking.service.js';
 import {
   acknowledge,
   addDriverNote,
   completeTrip,
-  decline,
   driverHome,
   driverRide,
   driverRideHistory,
@@ -22,6 +22,7 @@ import {
 import { OPEN_STATUSES, TERMINAL_STATUSES } from '../domain.js';
 import { getMyProfile, selfProfileSchema, updateMyProfile } from '../services/employee.service.js';
 import { paginationSchema } from '../utils/listing.js';
+import { AppError } from '../utils/errors.js';
 
 // ===========================================================================
 // Employee self-service: every query is filtered by the caller's own user id.
@@ -31,7 +32,8 @@ employeeRouter.use(requireRole('EMPLOYEE'));
 
 employeeRouter.get('/home', async (req, res) => {
   const me = req.auth!.user._id;
-  const [pending, upcoming, recent, unread] = await Promise.all([
+  const employee = await Employee.findOne({ user: me }).select('officeLocation').lean();
+  const [pending, upcoming, recent, unread, bookedToday] = await Promise.all([
     CabRequest.find({ employeeUser: me, status: { $in: ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED'] } }).sort({ scheduledPickupAt: 1 }).limit(10).lean(),
     CabRequest.find({ employeeUser: me, status: { $in: ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'] } })
       .sort({ scheduledPickupAt: 1 })
@@ -40,9 +42,10 @@ employeeRouter.get('/home', async (req, res) => {
       .lean(),
     CabRequest.find({ employeeUser: me, status: { $in: TERMINAL_STATUSES } }).sort({ scheduledPickupAt: -1 }).limit(5).lean(),
     Notification.countDocuments({ user: me, readAt: null }),
+    employee?.officeLocation ? hasCabForCurrentWorkDay(String(me), employee.officeLocation) : false,
   ]);
   const active = upcoming.find((b) => ['DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'].includes(b.status)) ?? null;
-  res.json({ pending, upcoming, activeTrip: active, recent, unreadNotifications: unread, openStatuses: OPEN_STATUSES });
+  res.json({ pending, upcoming, activeTrip: active, recent, unreadNotifications: unread, openStatuses: OPEN_STATUSES, bookedToday });
 });
 
 employeeRouter.get('/profile', async (req, res) => {
@@ -100,8 +103,9 @@ driverRouter.post('/duty', async (req, res) => {
 driverRouter.post('/rides/:id/acknowledge', async (req, res) => {
   res.json(await acknowledge(actorFromRequest(req), objectId(req.params.id, 'Ride')));
 });
-driverRouter.post('/rides/:id/decline', async (req, res) => {
-  res.json(await decline(actorFromRequest(req), objectId(req.params.id, 'Ride'), body(z.object({ reason: z.string().trim().min(3).max(500) }), req).reason));
+// Drivers can't cancel or hand back a ride: they call the coordinator, who changes the cab.
+driverRouter.post('/rides/:id/decline', () => {
+  throw new AppError(403, 'DRIVER_CANNOT_CANCEL', "Drivers can't cancel a ride. Please call your transport coordinator.");
 });
 driverRouter.post('/rides/:id/en-route', async (req, res) => {
   await markEnRoute(actorFromRequest(req), objectId(req.params.id, 'Ride'));

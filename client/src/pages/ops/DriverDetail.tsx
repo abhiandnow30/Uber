@@ -6,7 +6,6 @@ import {
   Alert,
   Button,
   Card,
-  Checkbox,
   ConfirmDialog,
   DataTable,
   DescriptionList,
@@ -26,8 +25,8 @@ import {
 import { del, errorMessage, get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fieldErrors } from '../../lib/hooks';
-import { fmtDateTime, fmtRelative, fmtTravelDate, humanize } from '../../lib/format';
-import { DriverFormModal, EMPLOYMENT, VehiclePicker, type DriverRow } from './Drivers';
+import { fmt12h, fmtDateTime, fmtRelative, fmtTravelDate, humanize } from '../../lib/format';
+import { DriverFormModal, EMPLOYMENT, type DriverRow } from './Drivers';
 import { ExpiryText } from './OpsDashboard';
 
 type Person = { _id: string; name: string } | null | undefined;
@@ -51,86 +50,6 @@ type DriverDetailData = DriverRow & {
   }>;
 };
 
-const DOCS = ['Driving license', 'Background verification', 'Medical fitness', 'Address proof', 'Police verification', 'Photo ID'];
-
-function VerifyModal({ open, onClose, driverId, onDone }: { open: boolean; onClose: () => void; driverId: string; onDone: () => void }) {
-  const [status, setStatus] = useState<'VERIFIED' | 'REJECTED' | 'PENDING'>('VERIFIED');
-  const [docs, setDocs] = useState<string[]>([]);
-  const [custom, setCustom] = useState('');
-  const [notes, setNotes] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (open) {
-      setStatus('VERIFIED');
-      setDocs([]);
-      setCustom('');
-      setNotes('');
-      setError('');
-    }
-  }, [open]);
-  const toggle = (d: string) => setDocs((x) => (x.includes(d) ? x.filter((y) => y !== d) : [...x, d]));
-  const allDocs = [...docs, ...custom.split(',').map((s) => s.trim()).filter(Boolean)];
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (status === 'VERIFIED' && !allDocs.length) {
-      setError('Tick the documents you checked before marking the driver verified.');
-      return;
-    }
-    if (status === 'REJECTED' && notes.trim().length < 3) {
-      setError('Add a note explaining why verification was rejected.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await post(`/ops/drivers/${driverId}/verify`, { status, documentsChecked: allDocs, notes: notes.trim() });
-      onDone();
-      onClose();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Verify driver documents"
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" form="verify-form" loading={busy} variant={status === 'REJECTED' ? 'danger' : 'primary'}>
-            Save verification
-          </Button>
-        </>
-      }
-    >
-      <form id="verify-form" onSubmit={submit} className="space-y-4">
-        <Select label="Outcome" value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
-          <option value="VERIFIED">Verified — documents are valid</option>
-          <option value="REJECTED">Rejected — documents invalid or missing</option>
-          <option value="PENDING">Pending — more information needed</option>
-        </Select>
-        <fieldset className="space-y-2">
-          <legend className="text-sm font-medium text-slate-700">Documents checked</legend>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {DOCS.map((d) => (
-              <Checkbox key={d} label={d} checked={docs.includes(d)} onChange={() => toggle(d)} />
-            ))}
-          </div>
-          <Input label="Other documents" value={custom} onChange={(e) => setCustom(e.target.value)} hint="Comma separated, e.g. Badge, Training certificate" />
-        </fieldset>
-        <Textarea label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <p className="text-xs text-slate-500">Each verification is recorded permanently in the driver&apos;s verification history.</p>
-        {error && <Alert tone="error">{error}</Alert>}
-      </form>
-    </Modal>
-  );
-}
 
 function EmploymentModal({ open, onClose, driver, onDone }: { open: boolean; onClose: () => void; driver: DriverDetailData; onDone: () => void }) {
   const [status, setStatus] = useState(driver.employmentStatus);
@@ -275,9 +194,8 @@ export default function DriverDetail() {
   const isAdmin = me?.user.role === 'ADMIN';
   const qc = useQueryClient();
   const toast = useToast();
-  const [tab, setTab] = useState<'trips' | 'links' | 'verification'>('trips');
+  const [tab, setTab] = useState<'trips' | 'links'>('trips');
   const [editing, setEditing] = useState(false);
-  const [verifying, setVerifying] = useState(false);
   const [employment, setEmployment] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -304,7 +222,7 @@ export default function DriverDetail() {
 
   const tripCols: Column<DriverDetailData['assignments'][number]>[] = [
     { key: 'ref', header: 'Booking', render: (a) => (a.booking ? <Link className="font-medium text-indigo-600 hover:underline" to={`/ops/bookings/${a.booking._id}`}>{a.booking.reference}</Link> : '—') },
-    { key: 'when', header: 'Pickup', render: (a) => <span className="whitespace-nowrap">{a.booking ? `${fmtTravelDate(a.booking.travelDate)} ${a.booking.pickupTime}` : fmtDateTime(a.scheduledPickupAt)}</span> },
+    { key: 'when', header: 'Pickup', render: (a) => <span className="whitespace-nowrap">{a.booking ? `${fmtTravelDate(a.booking.travelDate)} ${fmt12h(a.booking.pickupTime)}` : fmtDateTime(a.scheduledPickupAt)}</span> },
     { key: 'route', header: 'Route', render: (a) => (a.booking ? <span className="text-xs">{a.booking.pickupLocation} → {a.booking.dropLocation}</span> : '—') },
     { key: 'veh', header: 'Vehicle', render: (a) => a.vehicle?.registrationNumber ?? '—' },
     { key: 'asg', header: 'Assignment', render: (a) => <StatusBadge status={a.status} /> },
@@ -319,13 +237,6 @@ export default function DriverDetail() {
     { key: 'by', header: 'Linked by', render: (l) => l.linkedBy?.name ?? '—' },
     { key: 'reason', header: 'Reason', render: (l) => <span className="text-xs">{[l.reason, l.endReason && `Ended: ${l.endReason}`].filter(Boolean).join(' · ') || '—'}</span> },
   ];
-  const verCols: Column<DriverDetailData['verifications'][number]>[] = [
-    { key: 'when', header: 'When', render: (v) => fmtDateTime(v.createdAt) },
-    { key: 'status', header: 'Outcome', render: (v) => <StatusBadge status={v.status} /> },
-    { key: 'docs', header: 'Documents checked', render: (v) => <span className="text-xs">{v.documentsChecked.join(', ') || '—'}</span> },
-    { key: 'notes', header: 'Notes', render: (v) => <span className="text-xs">{v.notes || '—'}</span> },
-    { key: 'by', header: 'Reviewed by', render: (v) => v.reviewedBy?.name ?? '—' },
-  ];
 
   const loginStatus = d.user?.status;
 
@@ -338,7 +249,6 @@ export default function DriverDetail() {
           <span className="inline-flex flex-wrap items-center gap-2">
             {d.driverCode} · {d.officeLocation}
             <StatusBadge status={d.availability} />
-            <StatusBadge status={d.verificationStatus} />
             {d.onDuty ? <span className="text-emerald-700">On duty</span> : <span>Off duty</span>}
           </span>
         }
@@ -347,7 +257,6 @@ export default function DriverDetail() {
             <Button variant="secondary" icon={<Pencil className="h-4 w-4" />} onClick={() => setEditing(true)}>
               Edit
             </Button>
-            {isAdmin && <Button onClick={() => setVerifying(true)}>Verify documents</Button>}
             <Button variant="secondary" onClick={() => setEmployment(true)}>
               Employment status
             </Button>
@@ -359,22 +268,15 @@ export default function DriverDetail() {
       />
 
       <div className="space-y-4">
-        {d.verificationStatus !== 'VERIFIED' && (
-          <Alert tone="warn" title={`Documents ${d.verificationStatus.toLowerCase()}`}>
-            This driver cannot be assigned trips until an administrator verifies their documents.
-          </Alert>
-        )}
         <div className="grid gap-4 lg:grid-cols-3">
           <Card title="Profile" className="lg:col-span-2">
             <DescriptionList
               items={[
                 ['Driver ID', d.driverCode],
                 ['Phone', d.phone],
-                ['Email', d.email || '—'],
                 ['Office', d.officeLocation],
                 ['License number', d.licenseNumber],
                 ['License expiry', <ExpiryText key="l" iso={d.licenseExpiry} />],
-                ['Verification', <span key="v" className="inline-flex items-center gap-2"><StatusBadge status={d.verificationStatus} />{d.verifiedAt && <span className="text-xs text-slate-500">{fmtDateTime(d.verifiedAt)}</span>}</span>],
                 ['Employment', <StatusBadge key="e" status={d.employmentStatus} />],
                 ['Availability', <StatusBadge key="a" status={d.availability} />],
                 ['Active assignments', activeCount],
@@ -386,10 +288,10 @@ export default function DriverDetail() {
           <div className="space-y-4">
             <Card title="Sign-in">
               <p className="mb-3 text-sm text-slate-600">
-                Signs in on their phone with mobile number <strong>{d.phone}</strong> and the last 4 characters of the linked vehicle&apos;s number.
+                Signs in with mobile number <strong>{d.phone}</strong>; the password is its first 4 digits.
               </p>
               {!d.user ? (
-                <p className="text-sm text-slate-500">Hasn&apos;t signed in yet. The driver can be assigned rides after their first sign-in.</p>
+                <p className="text-sm text-slate-500">Hasn&apos;t signed in yet. You can already assign rides; the driver sees them after signing in.</p>
               ) : (
                 <>
                   <DescriptionList
@@ -418,29 +320,30 @@ export default function DriverDetail() {
                 </>
               )}
             </Card>
-            <Card title="Linked vehicle">
+            <Card title="Cab">
               {!d.currentVehicle ? (
-                <>
-                  <p className="mb-2 text-sm text-slate-500">No vehicle linked. Choose a free cab to link it.</p>
-                  <VehiclePicker driver={d} />
-                </>
+                <p className="text-sm text-slate-500">
+                  Not assigned to a cab yet. Open a cab under{' '}
+                  <Link className="font-medium text-indigo-600 hover:underline" to="/ops/vehicles">
+                    Vehicles
+                  </Link>{' '}
+                  and choose this driver.
+                </p>
               ) : (
                 <>
                   <p className="text-sm">
-                    <Link className="font-medium text-indigo-600 hover:underline" to={`/ops/vehicles/${d.currentVehicle._id}`}>
+                    <Link className="font-mono font-medium text-indigo-600 hover:underline" to={`/ops/vehicles/${d.currentVehicle._id}`}>
                       {d.currentVehicle.registrationNumber}
                     </Link>{' '}
-                    {d.currentVehicle.model ? `· ${d.currentVehicle.model} ` : ''}· {d.currentVehicle.capacity} seats <StatusBadge status={d.currentVehicle.status} />
+                    · {d.currentVehicle.capacity} seats <StatusBadge status={d.currentVehicle.status} />
                   </p>
-                  {currentLink && <p className="mt-1 text-xs text-slate-500">Linked {fmtDateTime(currentLink.startedAt)} by {currentLink.linkedBy?.name ?? '—'}</p>}
-                  <div className="mt-3 flex flex-wrap items-end gap-2">
-                    <VehiclePicker driver={d} className="min-w-[11rem] flex-1" />
-                    {currentLink && (
-                      <Button variant="secondary" onClick={() => setDialog('endLink')}>
-                        End link
-                      </Button>
-                    )}
-                  </div>
+                  {currentLink && <p className="mt-1 text-xs text-slate-500">Assigned {fmtDateTime(currentLink.startedAt)} by {currentLink.linkedBy?.name ?? '—'}</p>}
+                  <p className="mt-2 text-xs text-slate-500">To change it, pick a different driver on the cab&apos;s page.</p>
+                  {currentLink && (
+                    <Button className="mt-3" size="sm" variant="secondary" onClick={() => setDialog('endLink')}>
+                      Remove from cab
+                    </Button>
+                  )}
                 </>
               )}
             </Card>
@@ -481,19 +384,16 @@ export default function DriverDetail() {
             tabs={[
               { value: 'trips', label: `Trip history (${d.assignments.length})` },
               { value: 'links', label: `Vehicle links (${d.links.length})` },
-              { value: 'verification', label: `Verification history (${d.verifications.length})` },
             ]}
             value={tab}
             onChange={setTab}
           />
           {tab === 'trips' && <DataTable columns={tripCols} rows={d.assignments} rowKey={(a) => a._id} empty={<EmptyState title="No trips yet" />} />}
           {tab === 'links' && <DataTable columns={linkCols} rows={d.links} rowKey={(l) => l._id} empty={<EmptyState title="Never linked to a vehicle" />} />}
-          {tab === 'verification' && <DataTable columns={verCols} rows={d.verifications} rowKey={(v) => v._id} empty={<EmptyState title="Not reviewed yet" description={isAdmin ? 'Use “Verify documents” to record a review.' : 'An administrator must verify this driver.'} />} />}
         </Card>
       </div>
 
       <DriverFormModal open={editing} onClose={() => setEditing(false)} driver={d} />
-      {isAdmin && <VerifyModal open={verifying} onClose={() => setVerifying(false)} driverId={d._id} onDone={() => { toast.success('Verification recorded'); refresh(); }} />}
       <EmploymentModal open={employment} onClose={() => setEmployment(false)} driver={d} onDone={() => { toast.success('Employment status updated'); refresh(); }} />
       <UnavailableModal
         open={unavailable}

@@ -13,7 +13,14 @@ export function localToUtc(date: string, time: string, timezone: string): Date |
   return dt.toUTC().toJSDate();
 }
 
-export function formatInZone(d: Date, timezone: string, fmt = 'dd LLL yyyy, HH:mm') {
+/** "22:00" -> "10:00 PM", for text people read (stored times stay HH:mm). */
+export function fmt12h(hhmm?: string | null) {
+  if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return hhmm ?? '';
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+export function formatInZone(d: Date, timezone: string, fmt = 'dd LLL yyyy, h:mm a') {
   return DateTime.fromJSDate(d).setZone(timezone).toFormat(fmt);
 }
 

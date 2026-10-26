@@ -1,12 +1,11 @@
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Button, Card, EmptyState, ErrorState, PageHeader, Pagination, Spinner, StatusBadge, Tabs, type Column, DataTable } from '../../components/ui';
+import { Button, Card, EmptyState, ErrorState, PageHeader, Pagination, Spinner, StatusBadge, type Column, DataTable } from '../../components/ui';
 import { qs } from '../../lib/api';
 import { fmtTravelDate } from '../../lib/format';
+import { pickupLabel } from '../../lib/policy';
 import { usePaged } from '../../lib/hooks';
-
-type Scope = 'upcoming' | 'past' | 'all';
 
 type MyBooking = {
   _id: string;
@@ -14,6 +13,9 @@ type MyBooking = {
   status: string;
   travelDate: string;
   pickupTime: string;
+  direction?: 'IN' | 'OUT';
+  reportBy?: string;
+  pickupTimeSet?: boolean;
   pickupLocation: string;
   dropLocation: string;
   passengers: number;
@@ -50,15 +52,15 @@ function Cab({ b }: { b: MyBooking }) {
 
 export default function MyBookings() {
   const navigate = useNavigate();
-  const [scope, setScope] = useState<Scope>('upcoming');
   const [page, setPage] = useState(1);
-  const query = qs({ scope: scope === 'all' ? undefined : scope, page, pageSize: PAGE_SIZE });
+  // Every booking in one list, latest pickup first.
+  const query = qs({ page, pageSize: PAGE_SIZE });
   const { data, isLoading, error, refetch, isFetching } = usePaged<MyBooking>(['my-bookings', 'list'], '/me/bookings', query);
 
   const columns: Column<MyBooking>[] = [
     { key: 'ref', header: 'Reference', render: (b) => <span className="font-mono text-xs">{b.reference}</span> },
     { key: 'date', header: 'Date', render: (b) => <span className="whitespace-nowrap">{fmtTravelDate(b.travelDate)}</span> },
-    { key: 'time', header: 'Pickup', render: (b) => b.pickupTime },
+    { key: 'time', header: 'Pickup', render: (b) => <span className={b.pickupTimeSet === false ? 'text-sm text-slate-600' : 'whitespace-nowrap'}>{pickupLabel(b)}</span> },
     {
       key: 'route',
       header: 'Route',
@@ -73,10 +75,7 @@ export default function MyBookings() {
   ];
 
   const empty = (
-    <EmptyState
-      title={scope === 'upcoming' ? 'No upcoming bookings' : scope === 'past' ? 'No past bookings' : 'No bookings yet'}
-      action={scope !== 'past' ? <Button onClick={() => navigate('/employee/request')}>Request a cab</Button> : undefined}
-    />
+    <EmptyState title="No bookings yet" action={<Button onClick={() => navigate('/employee/request')}>Request a cab</Button>} />
   );
 
   return (
@@ -89,19 +88,6 @@ export default function MyBookings() {
           </Button>
         }
       />
-      <Tabs<Scope>
-        tabs={[
-          { value: 'upcoming', label: 'Upcoming' },
-          { value: 'past', label: 'Past' },
-          { value: 'all', label: 'All' },
-        ]}
-        value={scope}
-        onChange={(v) => {
-          setScope(v);
-          setPage(1);
-        }}
-      />
-
       {/* Mobile: cards */}
       <div className="sm:hidden">
         {isLoading ? (
@@ -118,7 +104,7 @@ export default function MyBookings() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="font-medium text-slate-900">
-                        {fmtTravelDate(b.travelDate)} · {b.pickupTime}
+                        {fmtTravelDate(b.travelDate)} · {pickupLabel(b)}
                       </p>
                       <p className="font-mono text-xs text-slate-500">{b.reference}</p>
                     </div>

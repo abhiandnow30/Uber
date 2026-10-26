@@ -2,7 +2,19 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { actorFromRequest, requireRole } from '../middleware/auth.js';
 import { body, objectId, query } from '../middleware/common.js';
-import { assignBooking, assignSchema, eligibleResources, reassignBooking, regeneratePin } from '../services/assignment.service.js';
+import {
+  assignBooking,
+  assignSchema,
+  assignTrip,
+  eligibleResources,
+  reassignBooking,
+  regeneratePin,
+  renameTrip,
+  tripEligibleResources,
+  tripEligibleSchema,
+  tripRenameSchema,
+  tripSchema,
+} from '../services/assignment.service.js';
 import { audit } from '../services/audit.service.js';
 import {
   approveBooking,
@@ -132,6 +144,19 @@ operationsRouter.get('/bookings/:id', async (req, res) => {
 });
 operationsRouter.get('/bookings/:id/eligible', async (req, res) => {
   res.json(await eligibleResources(actorFromRequest(req), objectId(req.params.id, 'Booking')));
+});
+// Shared trips: several rides on one cab.
+operationsRouter.post('/trips/eligible', async (req, res) => {
+  res.json(await tripEligibleResources(actorFromRequest(req), body(tripEligibleSchema, req).bookingIds));
+});
+operationsRouter.post('/trips', async (req, res) => {
+  const key = req.get('idempotency-key')?.slice(0, 100);
+  const result = await assignTrip(actorFromRequest(req), body(tripSchema, req), key);
+  res.status(result.duplicate ? 200 : 201).json(result);
+});
+operationsRouter.patch('/trips/:tripId', async (req, res) => {
+  const tripId = z.string().uuid('Invalid trip').parse(req.params.tripId);
+  res.json(await renameTrip(actorFromRequest(req), tripId, body(tripRenameSchema, req).name));
 });
 operationsRouter.post('/bookings/:id/assign', async (req, res) => {
   const key = req.get('idempotency-key')?.slice(0, 100);

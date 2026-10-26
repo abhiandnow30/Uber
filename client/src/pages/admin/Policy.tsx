@@ -48,7 +48,6 @@ const SECTIONS: Array<{ key: SectionKey; title: string; description: string; fie
       { key: 'defaultTripDurationMinutes', label: 'Default trip duration (minutes)', type: 'number', min: 10, max: 1440 },
       { key: 'bufferMinutes', label: 'Buffer between trips (minutes)', type: 'number', min: 0, max: 240 },
       { key: 'acknowledgementTimeoutMinutes', label: 'Driver acknowledgement timeout (minutes)', type: 'number', min: 1, max: 1440 },
-      { key: 'requireVerifiedDriver', label: 'Only verified drivers can be assigned', type: 'boolean' },
     ],
   },
   {

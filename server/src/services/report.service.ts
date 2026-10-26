@@ -10,12 +10,15 @@ import { Vehicle } from '../models/Vehicle.js';
 import { badRequest } from '../utils/errors.js';
 import { DATE_RE } from '../utils/time.js';
 import type { Actor } from './audit.service.js';
+import { currentWorkDay, workDayMatch } from './booking.service.js';
 import { getPolicy } from './policy.service.js';
 import { assertInScope, bookingScope, scopeFilter } from './scope.service.js';
 
 export const dashboardQuerySchema = z.object({
   date: z.string().regex(DATE_RE).optional(),
   officeLocation: z.string().trim().toUpperCase().optional(),
+  // Coordinator dashboard: today's or tomorrow's work day (a shift's after-midnight cabs count for the day it started).
+  day: z.enum(['today', 'tomorrow']).optional(),
 });
 
 async function defaultDate() {
@@ -54,7 +57,7 @@ export async function adminDashboard(q: z.infer<typeof dashboardQuerySchema>) {
       const coords = await Coordinator.find(office ? { officeLocations: office } : {}, { user: 1 }).lean();
       return User.countDocuments({ _id: { $in: coords.map((c) => c.user) }, status: 'ACTIVE' });
     })(),
-    Driver.countDocuments({ ...officeMatch, employmentStatus: 'ACTIVE', verificationStatus: 'VERIFIED' }),
+    Driver.countDocuments({ ...officeMatch, employmentStatus: 'ACTIVE' }),
     Vehicle.countDocuments(officeMatch),
     Vehicle.countDocuments({ ...officeMatch, status: 'ACTIVE' }),
     CabAssignment.distinct('vehicle', { ...officeMatch, status: 'ACTIVE', windowStart: { $lte: new Date() }, windowEnd: { $gte: new Date() } }),
@@ -80,22 +83,47 @@ export async function adminDashboard(q: z.infer<typeof dashboardQuerySchema>) {
   };
 }
 
+/**
+ * The coordinator's night at a glance, for one work day (today's by default): what needs action,
+ * the next rides still waiting for a cab, and whether there are drivers and cabs to cover them.
+ */
 export async function coordinatorDashboard(actor: Actor, q: z.infer<typeof dashboardQuerySchema>) {
   const bScope = await bookingScope(actor);
   const scope = bScope.offices;
   if (q.officeLocation) assertInScope(scope, q.officeLocation);
-  const date = q.date ?? (await defaultDate());
+  const today = await currentWorkDay();
+  const workDay = q.date ?? (q.day === 'tomorrow' ? DateTime.fromISO(today).plus({ days: 1 }).toFormat('yyyy-MM-dd') : today);
   const officeMatch = q.officeLocation ? { officeLocation: q.officeLocation } : scopeFilter(scope);
-  const bookingMatch = officeMatch;
+  const dayMatch = { ...officeMatch, ...workDayMatch(workDay) };
   const ackCutoff = new Date(Date.now() - ((await getPolicy()).assignment?.acknowledgementTimeoutMinutes ?? 30) * 60_000);
-  const [bookings, unacknowledged, driversOnDuty, driversAvailable, delayed] = await Promise.all([
-    bookingCounts({ ...bookingMatch, travelDate: date }),
+  const [bookings, delayed, nextWaiting, unacknowledged, cancellationRequests, driversOnDuty, driversAvailable, activeCabs, cabsWithoutDriver] = await Promise.all([
+    bookingCounts(dayMatch),
+    CabRequest.countDocuments({ ...dayMatch, isDelayed: true, status: { $in: ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'] } }),
+    CabRequest.find({ ...dayMatch, status: { $in: ['REQUESTED', 'APPROVED', 'PENDING_APPROVAL'] } })
+      .sort({ scheduledPickupAt: 1 })
+      .limit(5)
+      .select('reference travelDate pickupTime pickupLocation dropLocation status employee')
+      .populate('employee', 'fullName employeeId route')
+      .lean(),
     CabAssignment.countDocuments({ ...officeMatch, status: 'ACTIVE', acknowledgedAt: null, createdAt: { $lt: ackCutoff } }),
+    CabRequest.countDocuments({ ...officeMatch, 'cancellationRequest.status': 'PENDING' }),
     Driver.countDocuments({ ...officeMatch, onDuty: true, employmentStatus: 'ACTIVE' }),
     Driver.countDocuments({ ...officeMatch, availability: 'AVAILABLE' }),
-    CabRequest.countDocuments({ ...bookingMatch, travelDate: date, isDelayed: true }),
+    Vehicle.countDocuments({ ...officeMatch, status: 'ACTIVE' }),
+    Vehicle.countDocuments({ ...officeMatch, status: 'ACTIVE', currentDriver: null }),
   ]);
-  return { date, offices: scope, bookings: { ...bookings, delayed }, unacknowledgedAssignments: unacknowledged, driversOnDuty, driversAvailable };
+  return {
+    date: workDay,
+    day: q.date ? null : (q.day ?? 'today'),
+    offices: scope,
+    bookings: { ...bookings, delayed },
+    nextWaiting,
+    unacknowledgedAssignments: unacknowledged,
+    cancellationRequests,
+    driversOnDuty,
+    driversAvailable,
+    cabs: { active: activeCabs, withoutDriver: cabsWithoutDriver },
+  };
 }
 
 // ---------------------------------------------------------------------------

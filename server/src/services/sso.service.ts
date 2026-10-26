@@ -3,7 +3,6 @@ import { ConfidentialClientApplication, CryptoProvider } from '@azure/msal-node'
 import { z } from 'zod';
 import { config } from '../config.js';
 import { withTransaction } from '../db.js';
-import { Employee } from '../models/Employee.js';
 import { AuthToken } from '../models/system.js';
 import { User } from '../models/User.js';
 import { AppError, conflict } from '../utils/errors.js';
@@ -148,18 +147,17 @@ export const selfRegistrationSchema = z.object({
   fullName: z.string().trim().min(2, 'Full name is required').max(100),
   phone: required('Phone', 25).refine((p) => PHONE_RE.test(p), 'Enter a valid phone number'),
   officeLocation: z.string().trim().toUpperCase().min(1, 'Office location is required'),
-  route: required('Route', 120),
+  // Employees give only their address; an admin sets their route (cab) afterwards.
   homeAddress: z.string().trim().min(5, 'Enter your full home address').max(300),
 });
 
-/** What the form needs: the verified identity plus the offices and routes to choose from. */
+/** What the form needs: the verified identity plus the offices to choose from. */
 export async function getRegistrationContext(ticket: Ticket) {
-  const [policy, routes] = await Promise.all([getPolicy(), Employee.distinct('route', { route: { $nin: [null, ''] } })]);
+  const policy = await getPolicy();
   return {
     email: ticket.email,
     fullName: ticket.name,
     offices: policy.officeLocations.filter((o) => o.active).map((o) => ({ code: o.code, name: o.name })),
-    routes: (routes as string[]).sort((a, b) => a.localeCompare(b)),
   };
 }
 
@@ -168,7 +166,7 @@ export async function completeRegistration(ticket: Ticket, input: z.infer<typeof
   if (await User.exists({ entraOid: ticket.oid })) throw conflict('This Microsoft account is already registered. Sign in instead.', 'ALREADY_REGISTERED');
   const actor = { id: '', role: 'EMPLOYEE' as const, email: ticket.email, ip: meta.ip, userAgent: meta.userAgent };
   const userId = await withTransaction(async (tx) => {
-    const employee = await createEmployee(actor, { ...input, email: ticket.email }, { sendInvitation: false, source: 'SSO' }, tx);
+    const employee = await createEmployee(actor, { ...input, route: '', email: ticket.email }, { sendInvitation: false, source: 'SSO' }, tx);
     const now = new Date();
     await User.updateOne(
       { _id: employee.user },

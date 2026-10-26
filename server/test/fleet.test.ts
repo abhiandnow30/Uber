@@ -9,21 +9,31 @@ import { anonymous, assign, makeAdmin, makeCoordinator, makeDriver, PASSWORD, sc
 const nextYear = () => new Date(Date.now() + 365 * 86400_000).toISOString();
 
 describe('fleet management', () => {
-  it('coordinator adds a driver (pending verification, no account until first sign-in) and a vehicle; admin verifies', async () => {
+  it('Driver IDs are generated in order and skip IDs already in use', async () => {
     const coord = await makeCoordinator(['HYD']);
-    const admin = await makeAdmin();
+    await makeDriver(); // a driver created another way
+    await Driver.updateOne({}, { $set: { driverCode: 'DRV002' } });
+    const add = (n: number) =>
+      coord.client.post('/api/ops/drivers', {
+        driverCode: 'IGNORED', fullName: `Driver ${n}`, phone: `+91 9333${n}${n} 0000${n}`,
+        licenseNumber: `TS00000000${n}`, licenseExpiry: nextYear(), officeLocation: 'HYD',
+      });
+    const codes = [];
+    for (const n of [1, 2, 3]) codes.push((await add(n).expect(201)).body.driverCode);
+    expect(codes).toEqual(['DRV001', 'DRV003', 'DRV004']);
+  });
+
+  it('coordinator adds a driver (ready to assign, no account until first sign-in) and a vehicle', async () => {
+    const coord = await makeCoordinator(['HYD']);
     const d = await coord.client.post('/api/ops/drivers', {
-      driverCode: 'DRV900', fullName: 'Raj Driver', phone: '+91 95555 55555', email: 'raj@test.com',
+      fullName: 'Raj Driver', phone: '+91 95555 55555',
       licenseNumber: 'TS1234567890', licenseExpiry: nextYear(), officeLocation: 'HYD',
     });
     expect(d.status).toBe(201);
-    expect(d.body.verificationStatus).toBe('PENDING');
-    expect(await User.exists({ email: 'raj@test.com' })).toBeNull(); // no email invitation for drivers
-    // coordinators cannot verify documents
-    await coord.client.post(`/api/ops/drivers/${d.body._id}/verify`, { status: 'VERIFIED', documentsChecked: ['License'] }).expect(403);
-    await admin.client.post(`/api/ops/drivers/${d.body._id}/verify`, { status: 'VERIFIED', documentsChecked: [] }).expect(400);
-    await admin.client.post(`/api/ops/drivers/${d.body._id}/verify`, { status: 'VERIFIED', documentsChecked: ['License', 'Police verification'] }).expect(200);
-    expect((await Driver.findById(d.body._id))!.verificationStatus).toBe('VERIFIED');
+    expect(d.body.verificationStatus).toBe('VERIFIED'); // no separate verification step
+    expect(d.body.driverCode).toMatch(/^DRV\d{3,}$/);
+    expect(d.body.email).toBeUndefined();
+    expect(await User.exists({ role: 'DRIVER' })).toBeNull(); // no account until the first mobile sign-in
 
     const v = await coord.client.post('/api/ops/vehicles', { registrationNumber: 'ts 09 zz 0001', model: 'Etios', vehicleType: 'SEDAN', capacity: 4, officeLocation: 'HYD' });
     expect(v.status).toBe(201);
@@ -79,48 +89,46 @@ describe('driver sign-in with mobile number and vehicle number', () => {
   async function setup() {
     const coord = await makeCoordinator(['HYD']);
     const d = await coord.client.post('/api/ops/drivers', {
-      driverCode: 'DRVM1', fullName: 'Mobile Driver', phone: '+91 98765 43210',
+      fullName: 'Mobile Driver', phone: '+91 98765 43210',
       licenseNumber: 'TSMOBILE001', licenseExpiry: nextYear(), officeLocation: 'HYD',
     }).expect(201);
     const v = await coord.client.post('/api/ops/vehicles', { registrationNumber: 'TS09AB1234', model: 'Dzire', vehicleType: 'SEDAN', capacity: 4, officeLocation: 'HYD' }).expect(201);
     await coord.client.post('/api/ops/links', { driverId: d.body._id, vehicleId: v.body._id }).expect(201);
     return { coord, driverId: d.body._id as string, vehicleId: v.body._id as string };
   }
-  const signIn = (phone: string, vehicleLast4: string, client = anonymous()) => client.post('/api/auth/driver-login', { phone, vehicleLast4 });
+  const signIn = (phone: string, password: string, client = anonymous()) => client.post('/api/auth/driver-login', { phone, password });
 
-  it('a driver added without email signs in with mobile + last 4 of the linked vehicle', async () => {
+  it('a driver added without email signs in with the mobile number + its first 4 digits', async () => {
     const { driverId } = await setup();
     expect((await Driver.findById(driverId))!.user).toBeFalsy(); // no account until first sign-in
     const client = anonymous();
-    const res = await signIn('98765 43210', 'ab1234'.slice(-4), client);
+    const res = await signIn('98765 43210', '9876', client);
     expect(res.status).toBe(200);
     const me = await client.get('/api/auth/me').expect(200);
     expect(me.body.user.role).toBe('DRIVER');
     const driver = await Driver.findById(driverId);
     expect((await User.findById(driver!.user))!.status).toBe('ACTIVE');
-    // signs in again later with the same details, same account
-    expect((await signIn('+919876543210', '1234')).status).toBe(200);
+    // with the country code too, same account
+    expect((await signIn('+919876543210', '9876')).status).toBe(200);
     expect(await User.countDocuments({ role: 'DRIVER', name: 'Mobile Driver' })).toBe(1);
   });
 
-  it('wrong vehicle digits, unknown numbers and unlinked drivers get the same refusal; repeated failures lock the number', async () => {
-    const { coord, driverId } = await setup();
-    const wrong = await signIn('9876543210', '9999');
-    const unknown = await signIn('9000000000', '1234');
+  it('wrong passwords and unknown numbers get the same refusal; repeated failures lock the number', async () => {
+    const { driverId } = await setup();
+    const wrong = await signIn('9876543210', '1234');
+    const unknown = await signIn('9000000000', '9000');
     expect(wrong.status).toBe(401);
     expect(unknown.status).toBe(401);
     expect(wrong.body.error.message).toBe(unknown.body.error.message);
     for (let i = 0; i < 4; i++) await signIn('9876543210', '0000');
-    const locked = await signIn('9876543210', '1234'); // right details, but locked now
+    const locked = await signIn('9876543210', '9876'); // right details, but locked now
     expect(locked.status).toBe(429);
     await Driver.updateOne({ _id: driverId }, { $unset: { phoneLoginLockedUntil: 1 } });
-    expect((await signIn('9876543210', '1234')).status).toBe(200);
+    expect((await signIn('9876543210', '9876')).status).toBe(200);
 
-    // unlinking the vehicle or deactivating the driver stops sign-in
-    const link = await coord.client.get(`/api/ops/drivers/${driverId}`).expect(200);
-    const current = link.body.links.find((l: { isCurrent: boolean }) => l.isCurrent);
-    await coord.client.post(`/api/ops/links/${current._id}/end`, { reason: 'Vehicle returned' }).expect(200);
-    expect((await signIn('9876543210', '1234')).status).toBe(401);
+    // a driver without a cab can still sign in; deactivating the driver stops sign-in
+    await Driver.updateOne({ _id: driverId }, { $set: { employmentStatus: 'INACTIVE' } });
+    expect((await signIn('9876543210', '9876')).status).toBe(401);
   });
 
   it('drivers cannot sign in with email and password, even if they once had one', async () => {
@@ -134,7 +142,7 @@ describe('driver sign-in with mobile number and vehicle number', () => {
   it('two active drivers cannot be registered with the same mobile number', async () => {
     const { coord } = await setup();
     const dup = await coord.client.post('/api/ops/drivers', {
-      driverCode: 'DRVM2', fullName: 'Second Driver', phone: '9876543210',
+      fullName: 'Second Driver', phone: '9876543210',
       licenseNumber: 'TSMOBILE002', licenseExpiry: nextYear(), officeLocation: 'HYD',
     });
     expect(dup.status).toBe(409);

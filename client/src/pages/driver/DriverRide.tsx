@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
 import { ApiError, errorMessage, get, post } from '../../lib/api';
-import { fmtDateTime, fmtTime, fmtTravelDate, mapsDirectionsUrl } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtTime, fmtTravelDate, mapsDirectionsUrl } from '../../lib/format';
 
 type Ride = {
   assignmentId: string;
@@ -195,7 +195,7 @@ export default function DriverRide() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notActive, setNotActive] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<'decline' | 'noshow' | 'complete' | null>(null);
+  const [dialog, setDialog] = useState<'noshow' | 'complete' | null>(null);
   const [note, setNote] = useState('');
   const [noteDirty, setNoteDirty] = useState(false);
   const [noteBusy, setNoteBusy] = useState(false);
@@ -305,9 +305,8 @@ export default function DriverRide() {
           <Button size="xl" loading={busy} onClick={() => run('en-route', 'On your way — the passenger has been notified')} icon={<Navigation className="h-6 w-6" aria-hidden />}>
             Start driving to pickup
           </Button>
-          <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setDialog('decline')}>
-            Can't take this ride
-          </Button>
+          {/* Drivers can't cancel or hand back a ride; the coordinator changes the cab if needed. */}
+          <p className="text-center text-sm text-slate-500">Can&apos;t make this ride? Call your transport coordinator.</p>
         </div>
       );
     } else if (status === 'DRIVER_EN_ROUTE') {
@@ -352,7 +351,7 @@ export default function DriverRide() {
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="font-mono text-sm text-slate-500">{b?.reference}</p>
-            <p className="text-3xl font-semibold text-slate-900">{b?.pickupTime}</p>
+            <p className="text-3xl font-semibold text-slate-900">{fmt12h(b?.pickupTime)}</p>
             <p className="text-sm text-slate-600">{b ? fmtTravelDate(b.travelDate) : '—'}</p>
           </div>
           <div className="flex flex-col items-end gap-1">
@@ -452,15 +451,6 @@ export default function DriverRide() {
         </div>
       </Card>
 
-      <ConfirmDialog
-        open={dialog === 'decline'}
-        onClose={() => setDialog(null)}
-        onConfirm={(reason) => confirmAction('decline', 'Ride declined — the coordinator will reassign it', { reason }).then(() => navigate('/driver'))}
-        title="Can't take this ride?"
-        message="The ride goes back to the transport coordinator, who will reassign it to another driver. Please tell them why."
-        confirmLabel="Decline ride"
-        reasonLabel="Reason"
-      />
       <ConfirmDialog
         open={dialog === 'noshow'}
         onClose={() => setDialog(null)}

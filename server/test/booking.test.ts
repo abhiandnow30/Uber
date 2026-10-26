@@ -27,18 +27,55 @@ describe('employee cab requests', () => {
     expect(b.body.duplicate).toBe(true);
     expect(b.body.booking._id).toBe(a.body.booking._id);
     // concurrent double-click
-    const input2 = bookingInput({ pickupTime: '18:00' });
+    const input2 = bookingInput({ travelDate: futureDate(2), pickupTime: '18:00' });
     const [c, d] = await Promise.all([client!.post('/api/me/bookings', input2), client!.post('/api/me/bookings', input2)]);
     expect([c.status, d.status].sort()).toEqual([200, 201]);
     expect(await CabRequest.countDocuments()).toBe(2);
   });
 
-  it('rejects a second open booking for the same pickup time', async () => {
+  it('allows one cab per day: a second request that day is rejected at any time', async () => {
     const { client } = await makeEmployee();
     await client!.post('/api/me/bookings', bookingInput()).expect(201);
-    const dup = await client!.post('/api/me/bookings', bookingInput({ clientRequestId: crypto.randomUUID() }));
-    expect(dup.status).toBe(409);
-    expect(dup.body.error.code).toBe('DUPLICATE_BOOKING');
+    for (const pickupTime of ['09:00', '21:00']) {
+      const dup = await client!.post('/api/me/bookings', bookingInput({ pickupTime }));
+      expect(dup.status).toBe(409);
+      expect(dup.body.error.code).toBe('SHIFT_DAY_BOOKED');
+    }
+    // the next day is fine
+    await client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(2) })).expect(201);
+  });
+
+  it('a completed ride still uses up the day; a rejected one frees it', async () => {
+    const { client } = await makeEmployee();
+    const coord = await makeCoordinator(['HYD']);
+    const first = await client!.post('/api/me/bookings', bookingInput()).expect(201);
+    await CabRequest.updateOne({ _id: first.body.booking._id }, { $set: { status: 'COMPLETED' }, $unset: { openSlotKey: 1 } });
+    expect((await client!.post('/api/me/bookings', bookingInput({ pickupTime: '20:00' }))).body.error.code).toBe('SHIFT_DAY_BOOKED');
+
+    const next = await client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(2) })).expect(201);
+    await coord.client.post(`/api/ops/bookings/${next.body.booking._id}/reject`, { reason: 'No cab available' }).expect(200);
+    await client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(2) })).expect(201);
+  });
+
+  it('the home page says whether the current work day already has a cab', async () => {
+    const { client, user } = await makeEmployee();
+    const res = await client!.post('/api/me/bookings', bookingInput()).expect(201);
+    expect((await client!.get('/api/me/home')).body.bookedToday).toBe(false);
+    // move that booking onto today's work day
+    await CabRequest.updateOne({ _id: res.body.booking._id }, { $set: { shiftDayKey: `${user._id}:${futureDate(0)}:OUTBOUND` } });
+    expect((await client!.get('/api/me/home')).body.bookedToday).toBe(true);
+    await client!.post(`/api/me/bookings/${res.body.booking._id}/cancel`, { reason: 'Plans changed' }).expect(200);
+    expect((await client!.get('/api/me/home')).body.bookedToday).toBe(false);
+  });
+
+  it('two different requests for the same day sent at once: only one is created', async () => {
+    const { client } = await makeEmployee();
+    const [a, b] = await Promise.all([
+      client!.post('/api/me/bookings', bookingInput({ pickupTime: '08:00' })),
+      client!.post('/api/me/bookings', bookingInput({ pickupTime: '19:00' })),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+    expect(await CabRequest.countDocuments()).toBe(1);
   });
 
   it('rejects invalid dates, past times, cut-off violations and too-far bookings', async () => {
@@ -138,7 +175,7 @@ describe('coordinator booking view', () => {
   it('supports filtering, search and pagination', async () => {
     const coord = await makeCoordinator(['HYD']);
     const emp = await makeEmployee();
-    for (const t of ['08:00', '09:00', '10:00']) await emp.client!.post('/api/me/bookings', bookingInput({ pickupTime: t })).expect(201);
+    for (const d of [1, 2, 3]) await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(d) })).expect(201);
     const page = await coord.client.get('/api/ops/bookings?pageSize=2&page=2');
     expect(page.body.total).toBe(3);
     expect(page.body.items).toHaveLength(1);

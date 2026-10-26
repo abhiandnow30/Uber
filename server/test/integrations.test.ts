@@ -161,8 +161,6 @@ describe('Entra ID single sign-on', () => {
   });
 
   it('self-registration requires every field, then creates an ACTIVE employee bound to the Microsoft account', async () => {
-    const existing = await makeEmployee();
-    await Employee.updateOne({ _id: existing.employee._id }, { $set: { route: 'LB Nagar Cab' } });
     const r = await signIn({ oid: 'oid-harika', tid: 'tenant-1', preferred_username: 'Harika.Velidi@company.com', name: 'Harika Velidi' });
     if (r.ok || r.reason !== 'register') throw new Error('expected a registration ticket');
     const client = anonymous();
@@ -170,19 +168,20 @@ describe('Entra ID single sign-on', () => {
 
     const ctx = await client.get('/api/auth/sso/registration').expect(200);
     expect(ctx.body).toMatchObject({ email: 'harika.velidi@company.com', fullName: 'Harika Velidi' });
-    expect(ctx.body.routes).toContain('LB Nagar Cab');
+    expect(ctx.body.routes).toBeUndefined(); // employees don't choose their route
     expect(ctx.body.offices.map((o: { code: string }) => o.code)).toContain('HYD');
 
-    const form = { employeeId: '1470', fullName: 'Harika Velidi', phone: '7036580058', officeLocation: 'HYD', route: 'Patancheru Cab', homeAddress: 'Ramky one symphony, Patancheru, 502319' };
-    for (const field of ['phone', 'route', 'homeAddress', 'officeLocation', 'employeeId'] as const) {
+    const form = { employeeId: '1470', fullName: 'Harika Velidi', phone: '7036580058', officeLocation: 'HYD', homeAddress: 'Ramky one symphony, Patancheru, 502319' };
+    for (const field of ['phone', 'homeAddress', 'officeLocation', 'employeeId'] as const) {
       const res = await client.post('/api/auth/sso/register', { ...form, [field]: '' });
       expect(res.status, field).toBe(422);
     }
-    // The email always comes from Microsoft, never from the form.
-    await client.post('/api/auth/sso/register', { ...form, email: 'someone.else@company.com' }).expect(201);
+    // The email always comes from Microsoft, and the route from an admin, never from the form.
+    await client.post('/api/auth/sso/register', { ...form, email: 'someone.else@company.com', route: 'Self Picked Cab' }).expect(201);
 
     const emp = await Employee.findOne({ employeeId: '1470' }).lean();
-    expect(emp).toMatchObject({ email: 'harika.velidi@company.com', officeLocation: 'HYD', route: 'Patancheru Cab', phone: '7036580058', source: 'SSO' });
+    expect(emp).toMatchObject({ email: 'harika.velidi@company.com', officeLocation: 'HYD', phone: '7036580058', source: 'SSO' });
+    expect(emp!.route || '').toBe(''); // shown as "Unknown" until an admin sets it
     const user = await User.findById(emp!.user).lean();
     expect(user).toMatchObject({ status: 'ACTIVE', entraOid: 'oid-harika', role: 'EMPLOYEE' });
     const me = await client.get('/api/auth/me').expect(200);

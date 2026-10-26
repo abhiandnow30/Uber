@@ -22,18 +22,17 @@ describe('end-to-end workflow', () => {
     await anonymous().post('/api/auth/activate', { token, password: 'NishaPass2026' }).expect(200);
     const emp = await login('nisha.verma@test.com', 'NishaPass2026');
 
-    // 6. Driver created and verified
+    // 6. Coordinator adds the driver (no separate verification step)
     const d = await coord.post('/api/ops/drivers', {
-      driverCode: 'DRV777', fullName: 'Mohan Singh', phone: '+91 94444 44444',
+      fullName: 'Mohan Singh', phone: '+91 94444 44444',
       licenseNumber: 'TS9988776655', licenseExpiry: new Date(Date.now() + 400 * 86400_000).toISOString(), officeLocation: 'HYD',
     });
     expect(d.status).toBe(201);
-    await admin.post(`/api/ops/drivers/${d.body._id}/verify`, { status: 'VERIFIED', documentsChecked: ['Driving license', 'Background check'] }).expect(200);
 
     // 7. Coordinator adds a vehicle and links it; the driver signs in with mobile + vehicle number
     const v = await coord.post('/api/ops/vehicles', { registrationNumber: 'TS09EE7777', model: 'Innova', vehicleType: 'MUV', capacity: 6, officeLocation: 'HYD' });
     await coord.post('/api/ops/links', { driverId: d.body._id, vehicleId: v.body._id }).expect(201);
-    const driver: Client = await driverLogin('94444 44444', 'TS09EE7777');
+    const driver: Client = await driverLogin('94444 44444');
     await driver.post('/api/driver/duty', { onDuty: true }).expect(200);
 
     // 8-9. Employee requests a cab; it appears on the coordinator dashboard
@@ -90,7 +89,7 @@ describe('end-to-end workflow', () => {
 
     // 23. Admin audit trail and reports
     const actions = (await AuditLog.find().lean()).map((l) => l.action);
-    for (const act of ['EMPLOYEE_CREATED', 'ACCOUNT_ACTIVATED', 'DRIVER_VERIFICATION', 'DRIVER_VEHICLE_LINKED', 'BOOKING_CREATED', 'RIDE_ASSIGNED', 'RIDE_ACKNOWLEDGED', 'RIDE_STARTED', 'RIDE_COMPLETED']) {
+    for (const act of ['EMPLOYEE_CREATED', 'ACCOUNT_ACTIVATED', 'DRIVER_CREATED', 'DRIVER_VEHICLE_LINKED', 'BOOKING_CREATED', 'RIDE_ASSIGNED', 'RIDE_ACKNOWLEDGED', 'RIDE_STARTED', 'RIDE_COMPLETED']) {
       expect(actions).toContain(act);
     }
     const report = await admin.get(`/api/admin/reports?from=${travelDate}&to=${travelDate}`);

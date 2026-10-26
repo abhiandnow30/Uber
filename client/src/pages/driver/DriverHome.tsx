@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Alert, Button, Card, EmptyState, ErrorState, Spinner } from '../../components/ui';
 import { get, post } from '../../lib/api';
-import { fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 
 type Vehicle = { registrationNumber?: string; model?: string; capacity?: number; status?: string } | null;
 
@@ -76,7 +76,7 @@ function RideCard({ r }: { r: RideView }) {
     <Link to={`/driver/rides/${r.assignmentId}`} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs active:bg-slate-50">
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="text-2xl font-bold text-slate-900">{b?.pickupTime ?? '—'}</span>
+          <span className="text-2xl font-bold text-slate-900">{b?.pickupTime ? fmt12h(b.pickupTime) : '—'}</span>
           <span className="text-sm text-slate-500">{b ? fmtTravelDate(b.travelDate) : '—'}</span>
           {b?.isDelayed && <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">Delayed</span>}
         </div>
@@ -126,7 +126,7 @@ export default function DriverHome() {
   const doneToday = data.completed.filter((r) => isSameLocalDay(r.completedAt)).length;
   const movedCount = data.cancelledOrReassigned.length;
   const noRides = !active && !allUpcoming.length;
-  const problem = d && (d.verificationStatus !== 'VERIFIED' || d.employmentStatus !== 'ACTIVE');
+  const problem = d && d.employmentStatus !== 'ACTIVE';
 
   return (
     <div className="space-y-6">
@@ -151,8 +151,7 @@ export default function DriverHome() {
 
       {problem && d && (
         <Alert tone="error" title="Your driver profile needs attention">
-          {d.employmentStatus !== 'ACTIVE' && <>Account: {humanize(d.employmentStatus)}. </>}
-          {d.verificationStatus !== 'VERIFIED' && <>Verification: {humanize(d.verificationStatus)}. </>}
+          Account: {humanize(d.employmentStatus)}.{' '}
           Please contact the transport coordinator.
         </Alert>
       )}
@@ -166,7 +165,7 @@ export default function DriverHome() {
             {active.booking.pickupLocation} <span className="text-slate-400">→</span> {active.booking.dropLocation}
           </p>
           <p className="mt-1 text-sm text-slate-600">
-            {active.employee?.name} · {active.booking.pickupTime} · <span className="font-mono text-xs">{active.booking.reference}</span>
+            {active.employee?.name} · {fmt12h(active.booking.pickupTime)} · <span className="font-mono text-xs">{active.booking.reference}</span>
           </p>
           <Button size="xl" className="mt-4 h-18 text-xl" onClick={() => navigate(`/driver/rides/${active.assignmentId}`)} icon={<ArrowRight className="h-6 w-6" aria-hidden />}>
             Open trip

@@ -18,7 +18,7 @@ import {
   type Column,
 } from '../../components/ui';
 import { get, post } from '../../lib/api';
-import { fmtDateTime, fmtRelative, fmtTravelDate, humanize, mapsDirectionsUrl } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtRelative, fmtTravelDate, humanize, mapsDirectionsUrl } from '../../lib/format';
 import { ASSIGNABLE, AssignModal, REASSIGNABLE, type AssignTarget } from './Bookings';
 
 type Person = { _id: string; name: string } | null | undefined;
@@ -314,7 +314,7 @@ export default function BookingDetail() {
             {b.flaggedForReview && <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">Needs review</span>}
             {b.cancellationRequest?.status === 'PENDING' && <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">Cancellation requested</span>}
             <span>
-              {fmtTravelDate(b.travelDate)} · pickup {b.pickupTime} ({tz})
+              {fmtTravelDate(b.travelDate)} · pickup {fmt12h(b.pickupTime)} ({tz})
             </span>
           </span>
         }

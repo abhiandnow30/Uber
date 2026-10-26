@@ -31,6 +31,7 @@ const EmailDelivery = p(() => import('./pages/admin/EmailDelivery'));
 // Operations (coordinator + admin)
 const OpsDashboard = p(() => import('./pages/ops/OpsDashboard'));
 const Bookings = p(() => import('./pages/ops/Bookings'));
+const BookingHistory = p(() => import('./pages/ops/Bookings').then((m) => ({ default: m.BookingHistory })));
 const BookingDetail = p(() => import('./pages/ops/BookingDetail'));
 const Drivers = p(() => import('./pages/ops/Drivers'));
 const DriverDetail = p(() => import('./pages/ops/DriverDetail'));
@@ -101,6 +102,7 @@ export default function App() {
 
           <Route path="/ops" element={<RequireRole roles={OPS}><OpsDashboard /></RequireRole>} />
           <Route path="/ops/bookings" element={<RequireRole roles={OPS}><Bookings /></RequireRole>} />
+          <Route path="/ops/history" element={<RequireRole roles={OPS}><BookingHistory /></RequireRole>} />
           <Route path="/ops/bookings/:id" element={<RequireRole roles={OPS}><BookingDetail /></RequireRole>} />
           <Route path="/ops/drivers" element={<RequireRole roles={OPS}><Drivers /></RequireRole>} />
           <Route path="/ops/drivers/:id" element={<RequireRole roles={OPS}><DriverDetail /></RequireRole>} />

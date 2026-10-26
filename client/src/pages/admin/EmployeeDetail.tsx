@@ -17,7 +17,7 @@ import {
   type Column,
 } from '../../components/ui';
 import { del, get, post } from '../../lib/api';
-import { fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 import { useAction } from '../../lib/hooks';
 import { useSsoConfig } from '../../lib/sso';
 import { DeleteEmployeeDialog, EmployeeFormModal, type EmployeeRow } from './Employees';
@@ -171,7 +171,7 @@ export default function EmployeeDetail() {
         </Link>
       ),
     },
-    { key: 'date', header: 'Travel date', render: (b) => <span className="whitespace-nowrap">{fmtTravelDate(b.travelDate)} {b.pickupTime}</span> },
+    { key: 'date', header: 'Travel date', render: (b) => <span className="whitespace-nowrap">{fmtTravelDate(b.travelDate)} {fmt12h(b.pickupTime)}</span> },
     { key: 'route', header: 'Route', render: (b) => <span className="text-xs">{b.pickupLocation} → {b.dropLocation}</span> },
     { key: 'type', header: 'Trip', render: (b) => humanize(b.tripType) },
     {
@@ -232,7 +232,7 @@ export default function EmployeeDetail() {
               ['Email', data.email],
               ['Phone', data.phone || '—'],
               ['Office', data.officeLocation || '—'],
-              ['Route', data.route || '—'],
+              ['Route (cab)', data.route || 'Unknown'],
               ['Present address', data.homeAddress || 'Not provided yet'],
               ['Source', humanize(data.source)],
               ['Created', fmtDateTime(data.createdAt)],

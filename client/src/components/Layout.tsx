@@ -62,6 +62,7 @@ const NAV: Record<Role, NavItem[]> = {
     { to: '/admin/coordinators', label: 'Coordinators', icon: <UserCog className={ic} /> },
     { to: '/admin/admins', label: 'Admins', icon: <ShieldCheck className={ic} /> },
     { to: '/ops/bookings', label: 'Cab requests', icon: <ClipboardList className={ic} /> },
+    { to: '/ops/history', label: 'History', icon: <History className={ic} /> },
     { to: '/ops/drivers', label: 'Drivers & vehicles', icon: <Car className={ic} />, match: ['/ops/vehicles'] },
     { to: '/admin/reports', label: 'Reports', icon: <BarChart3 className={ic} /> },
     { to: '/admin/policy', label: 'Settings', icon: <Settings className={ic} />, match: ['/admin/notifications', '/admin/audit'] },
@@ -69,6 +70,7 @@ const NAV: Record<Role, NavItem[]> = {
   COORDINATOR: [
     { to: '/ops', label: 'Dashboard', icon: <Home className={ic} />, end: true },
     { to: '/ops/bookings', label: 'Cab requests', icon: <ClipboardList className={ic} /> },
+    { to: '/ops/history', label: 'History', icon: <History className={ic} /> },
     { to: '/ops/drivers', label: 'Drivers & vehicles', icon: <Car className={ic} />, match: ['/ops/vehicles'] },
   ],
   EMPLOYEE: [
@@ -185,7 +187,8 @@ export function AppLayout() {
             <span className="font-semibold">{isDriver ? 'Driver' : 'Cab Booking'}</span>
             <span className={cn('h-2 w-2 rounded-full', connected ? 'bg-emerald-500' : 'bg-slate-300')} title={connected ? 'Live updates on' : 'Reconnecting…'} />
           </div>
-          <NotificationBell />
+          {/* Drivers have the bell on their own home card, so not a second one here. */}
+          {!isDriver && <NotificationBell />}
         </header>
         {!isDriver && (
           <div className="sticky top-0 z-20 hidden h-14 items-center justify-end gap-2 border-b border-slate-200 bg-white/95 px-6 backdrop-blur-sm lg:flex">
@@ -202,9 +205,9 @@ export function AppLayout() {
         </main>
       </div>
 
-      {/* Mobile drawer */}
+      {/* Menu drawer: on phones for everyone; drivers have no sidebar, so they use it on every screen size. */}
       {open && (
-        <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+        <div className={cn('fixed inset-0 z-40', !isDriver && 'lg:hidden')} role="dialog" aria-modal="true" aria-label="Menu">
           <div className="absolute inset-0 bg-slate-900/40" onClick={() => setOpen(false)} />
           <div className="absolute inset-y-0 left-0 flex w-72 flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between pr-2">

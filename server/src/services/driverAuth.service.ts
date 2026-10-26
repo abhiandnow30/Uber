@@ -1,7 +1,6 @@
 import { withTransaction } from '../db.js';
 import { Driver } from '../models/Driver.js';
 import { User } from '../models/User.js';
-import { Vehicle } from '../models/Vehicle.js';
 import { AppError } from '../utils/errors.js';
 import { audit } from './audit.service.js';
 import { createSession } from './session.service.js';
@@ -17,17 +16,19 @@ export const placeholderDriverEmail = (driverCode: string) => `driver.${driverCo
 export const isPlaceholderEmail = (email?: string | null) => !!email && email.endsWith('@phone-login.invalid');
 
 const noMatch = () =>
-  new AppError(401, 'INVALID_CREDENTIALS', "Those details don't match our records. Check your mobile number and the last 4 characters of your vehicle number, or contact your transport coordinator.");
+  new AppError(401, 'INVALID_CREDENTIALS', "Those details don't match our records. Check your mobile number and password (the first 4 digits of your mobile number), or contact your transport coordinator.");
 
 /**
- * Driver sign-in with the mobile number the coordinator registered and the last 4
- * characters of the vehicle currently linked to them. Repeated failures for a number
- * lock it for a while; every outcome looks the same to the caller.
+ * Driver sign-in: the mobile number the coordinator registered is the username, and its first
+ * 4 digits (of the 10-digit number, without +91) are the password — the company's chosen
+ * method. Note this is derivable from the number itself, so it only keeps out people who don't
+ * know a driver's number. Repeated failures for a number lock it for a while; every outcome looks
+ * the same to the caller.
  */
-export async function driverPhoneLogin(phoneRaw: string, last4Raw: string, meta: { ip?: string; userAgent?: string }) {
+export async function driverPhoneLogin(phoneRaw: string, passwordRaw: string, meta: { ip?: string; userAgent?: string }) {
   const key = phoneKey(phoneRaw);
-  const last4 = last4Raw.replace(/[^a-z0-9]/gi, '').toUpperCase();
-  if (key.length !== 10 || last4.length !== 4) throw noMatch();
+  const password = passwordRaw.replace(/\D/g, '');
+  if (key.length !== 10 || password.length !== 4) throw noMatch();
 
   const candidates = await Driver.find({ phoneKey: key, employmentStatus: 'ACTIVE' });
   // A number shared by two active drivers is ambiguous: refuse rather than guess.
@@ -37,9 +38,7 @@ export async function driverPhoneLogin(phoneRaw: string, last4Raw: string, meta:
     throw new AppError(429, 'ACCOUNT_LOCKED', `Too many incorrect attempts. Try again in ${LOCK_MINUTES} minutes or contact your transport coordinator.`);
   }
 
-  const vehicle = driver.currentVehicle ? await Vehicle.findById(driver.currentVehicle).lean() : null;
-  const plate = (vehicle?.registrationNumber ?? '').replace(/[^a-z0-9]/gi, '').toUpperCase();
-  if (!vehicle || !plate.endsWith(last4)) {
+  if (password !== key.slice(0, 4)) {
     const failures = (driver.phoneLoginFailures ?? 0) + 1;
     const locked = failures >= MAX_FAILURES;
     await Driver.updateOne(
@@ -71,6 +70,6 @@ export async function driverPhoneLogin(phoneRaw: string, last4Raw: string, meta:
   await Driver.updateOne({ _id: driver._id }, { $set: { phoneLoginFailures: 0 }, $unset: { phoneLoginLockedUntil: 1 } });
   await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
   const s = await createSession(user, { ...meta, method: 'PHONE' });
-  await audit({ id: String(user._id), role: 'DRIVER', email: user.email, ...meta }, 'LOGIN', 'User', user._id, 'Signed in with mobile number and vehicle number');
+  await audit({ id: String(user._id), role: 'DRIVER', email: user.email, ...meta }, 'LOGIN', 'User', user._id, 'Signed in with mobile number');
   return { user, session: s };
 }

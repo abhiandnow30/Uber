@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Card, EmptyState, ErrorState, Pagination, Spinner, StatusBadge } from '../../components/ui';
 import { qs } from '../../lib/api';
-import { fmtDateTime, fmtTravelDate } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtTravelDate } from '../../lib/format';
 import { usePaged } from '../../lib/hooks';
 
 type HistoryRide = {
@@ -54,7 +54,7 @@ export default function DriverHistory() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="font-medium text-slate-900">
-                        {b ? `${fmtTravelDate(b.travelDate)} · ${b.pickupTime}` : fmtDateTime(r.scheduledPickupAt)}
+                        {b ? `${fmtTravelDate(b.travelDate)} · ${fmt12h(b.pickupTime)}` : fmtDateTime(r.scheduledPickupAt)}
                       </p>
                       <p className="font-mono text-xs text-slate-500">{b?.reference ?? '—'}</p>
                     </div>

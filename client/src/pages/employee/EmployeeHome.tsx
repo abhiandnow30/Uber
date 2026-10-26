@@ -1,10 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, CalendarClock, Car, Phone, Plus } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { CalendarClock, Car, Phone, Plus, X } from 'lucide-react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, EmptyState, ErrorState, PageHeader, Spinner, cn } from '../../components/ui';
-import { get } from '../../lib/api';
+import { Alert, Button, Card, ConfirmDialog, EmptyState, ErrorState, PageHeader, Spinner, cn, useToast } from '../../components/ui';
+import { get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fmtTravelDate } from '../../lib/format';
+import { pickupLabel } from '../../lib/policy';
+import { PinCard, PRE_START } from './MyBookingDetail';
 
 type Assigned = {
   driver?: { fullName?: string; phone?: string } | null;
@@ -17,6 +20,9 @@ type HomeBooking = {
   status: string;
   travelDate: string;
   pickupTime: string;
+  direction?: 'IN' | 'OUT';
+  reportBy?: string;
+  pickupTimeSet?: boolean;
   scheduledPickupAt?: string;
   pickupLocation: string;
   dropLocation: string;
@@ -31,6 +37,8 @@ type HomeData = {
   activeTrip: HomeBooking | null;
   recent: HomeBooking[];
   unreadNotifications: number;
+  // Already has a cab for the current work day (one per day; the day runs until the end of cab hours).
+  bookedToday: boolean;
 };
 
 /** Plain-language status for employees (no internal jargon). */
@@ -56,10 +64,12 @@ function PlainStatus({ status, delayed, className }: { status: string; delayed?:
 
 const assignmentOf = (b: HomeBooking): Assigned => (b.currentAssignment && typeof b.currentAssignment === 'object' ? b.currentAssignment : null);
 const sortKey = (b: HomeBooking) => b.scheduledPickupAt ?? `${b.travelDate}T${b.pickupTime}`;
+// No cab assigned yet: the employee can still cancel it themselves.
+const isWaiting = (b: HomeBooking) => ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED'].includes(b.status);
 
-function NextRideCard({ b }: { b: HomeBooking }) {
+function NextRideCard({ b, onCancel }: { b: HomeBooking; onCancel: (b: HomeBooking) => void }) {
   const a = assignmentOf(b);
-  const waiting = ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED'].includes(b.status);
+  const waiting = isWaiting(b);
   const vehicleModel = a?.vehicle?.model ?? '';
   return (
     <section className="rounded-xl border-2 border-indigo-200 bg-indigo-50/60 p-4 shadow-xs" aria-labelledby="next-ride-title">
@@ -68,7 +78,7 @@ function NextRideCard({ b }: { b: HomeBooking }) {
       </h2>
       <PlainStatus status={b.status} delayed={b.isDelayed} className="mt-2" />
       <p className="mt-3 text-lg font-semibold text-slate-900">
-        {fmtTravelDate(b.travelDate)} · {b.pickupTime}
+        {fmtTravelDate(b.travelDate)} · {pickupLabel(b)}
       </p>
       <p className="text-sm text-slate-700">
         {b.pickupLocation} <span aria-label="to">→</span> {b.dropLocation}
@@ -99,34 +109,43 @@ function NextRideCard({ b }: { b: HomeBooking }) {
         </div>
       ) : null}
 
-      <Link to={`/employee/bookings/${b._id}`} className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-indigo-700 hover:underline">
-        View details & PIN <ArrowRight className="h-4 w-4" aria-hidden />
-      </Link>
+      {waiting && (
+        <div className="mt-4 flex justify-end">
+          <Button size="sm" variant="danger" icon={<X className="h-4 w-4" aria-hidden />} onClick={() => onCancel(b)}>
+            Cancel ride
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
 
-function ComingUpRow({ b }: { b: HomeBooking }) {
-  return (
-    <li>
-      <Link to={`/employee/bookings/${b._id}`} className="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-slate-900">
-            {fmtTravelDate(b.travelDate)} · {b.pickupTime}
-          </p>
-          <p className="truncate text-sm text-slate-600">
-            {b.pickupLocation} → {b.dropLocation}
-          </p>
-        </div>
-        <PlainStatus status={b.status} delayed={b.isDelayed} className="shrink-0 justify-end" />
-      </Link>
-    </li>
-  );
+type PinView = { timezone: string; pin: { code: string; expiresAt: string } | null };
+
+/** The ride-start PIN, shown once a cab is assigned and until the ride starts. */
+function RidePin({ bookingId }: { bookingId: string }) {
+  const { data } = useQuery({
+    queryKey: ['my-bookings', 'detail', bookingId],
+    queryFn: () => get<PinView>(`/me/bookings/${bookingId}`),
+    refetchInterval: 30_000,
+    gcTime: 0, // contains the PIN: do not keep it cached after leaving the page
+  });
+  return data?.pin ? <PinCard pin={data.pin} tz={data.timezone} /> : null;
 }
 
 export default function EmployeeHome() {
   const { me } = useAuth();
   const navigate = useNavigate();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [cancelling, setCancelling] = useState<HomeBooking | null>(null);
+  const cancel = async (reason: string) => {
+    if (!cancelling) return;
+    await post(`/me/bookings/${cancelling._id}/cancel`, { reason });
+    toast.success('Booking cancelled', cancelling.reference);
+    qc.invalidateQueries({ queryKey: ['my-bookings'] });
+    qc.invalidateQueries({ queryKey: ['employee-home'] });
+  };
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['employee-home'],
     queryFn: () => get<HomeData>('/me/home'),
@@ -139,8 +158,6 @@ export default function EmployeeHome() {
   const upcoming = data ? [...data.upcoming].sort((x, y) => sortKey(x).localeCompare(sortKey(y))) : [];
   const pending = data ? [...data.pending].sort((x, y) => sortKey(x).localeCompare(sortKey(y))) : [];
   const featured = data ? data.activeTrip ?? upcoming[0] ?? pending[0] ?? null : null;
-  const rest = [...upcoming, ...pending].filter((b) => b._id !== featured?._id).sort((x, y) => sortKey(x).localeCompare(sortKey(y)));
-  const comingUp = rest.slice(0, 3);
 
   const requestButton = (
     <Button size="xl" className="sm:max-w-sm" icon={<Plus className="h-5 w-5" aria-hidden />} onClick={() => navigate('/employee/request')}>
@@ -163,7 +180,7 @@ export default function EmployeeHome() {
         </div>
       )}
 
-      <div className="mb-6">{requestButton}</div>
+      {featured && !data?.bookedToday && <div className="mb-6">{requestButton}</div>}
 
       {isLoading ? (
         <Spinner />
@@ -172,26 +189,8 @@ export default function EmployeeHome() {
       ) : data ? (
         featured ? (
           <div className="space-y-6">
-            <NextRideCard b={featured} />
-
-            <Card
-              title="Coming up"
-              actions={
-                <Link to="/employee/bookings" className="text-sm font-medium text-indigo-700 hover:underline">
-                  See all bookings
-                </Link>
-              }
-            >
-              {comingUp.length ? (
-                <ul className="-my-3 divide-y divide-slate-100">
-                  {comingUp.map((b) => (
-                    <ComingUpRow key={b._id} b={b} />
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-slate-500">Nothing else booked.</p>
-              )}
-            </Card>
+            <NextRideCard b={featured} onCancel={setCancelling} />
+            {PRE_START.includes(featured.status) && <RidePin bookingId={featured._id} />}
           </div>
         ) : (
           <Card>
@@ -213,6 +212,25 @@ export default function EmployeeHome() {
           </Card>
         )
       ) : null}
+
+      <ConfirmDialog
+        open={!!cancelling}
+        onClose={() => setCancelling(null)}
+        onConfirm={cancel}
+        title="Cancel this ride?"
+        message={
+          cancelling && (
+            <>
+              <p>
+                {cancelling.reference} · {fmtTravelDate(cancelling.travelDate)} · {pickupLabel(cancelling)}
+              </p>
+              <p className="mt-1 text-slate-500">This cannot be undone. You can request a cab for that day again afterwards.</p>
+            </>
+          )
+        }
+        confirmLabel="Cancel ride"
+        reasonLabel="Reason for cancelling"
+      />
     </>
   );
 }

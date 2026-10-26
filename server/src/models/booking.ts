@@ -26,6 +26,15 @@ const cabRequestSchema = new Schema(
     approvalRequired: { type: Boolean, default: false },
     // The date the employee's shift starts; travelDate is the cab's date (next day after midnight).
     shiftDate: { type: String },
+    // IN = home → office, OUT = office → home. For IN rides the shift start is when the employee must
+    // reach the office (reportBy, HH:mm); the transport team sets the actual pickup time when assigning
+    // the cab, so until then pickupTime/scheduledPickupAt hold the reach-by time and pickupTimeSet is false.
+    direction: { type: String, enum: ['IN', 'OUT'] },
+    // The employee's shift times for this day (HH:mm), as entered when requesting.
+    shiftStart: { type: String },
+    shiftEnd: { type: String },
+    reportBy: { type: String },
+    pickupTimeSet: { type: Boolean, default: true },
     approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     approvedAt: { type: Date },
     rejectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -43,6 +52,11 @@ const cabRequestSchema = new Schema(
     // Set while the booking is open; unique so an employee cannot hold two open
     // bookings for the same pickup instant (accidental double submission).
     openSlotKey: { type: String },
+    // employee:shiftDay:leg. Set until the booking is cancelled or rejected; unique so an
+    // employee gets one cab per shift day (a 7 PM shift's 1 AM cab counts for the day the shift started).
+    shiftDayKey: { type: String },
+    // The work day this cab counts for (kept after cancellation, unlike shiftDayKey).
+    workDay: { type: String, index: true },
     flaggedForReview: { type: Boolean, default: false },
     flagReason: { type: String },
     // Once a cab is assigned the employee can't cancel directly; they ask the transport team.
@@ -64,6 +78,10 @@ cabRequestSchema.index(
 cabRequestSchema.index(
   { openSlotKey: 1 },
   { unique: true, partialFilterExpression: { openSlotKey: { $type: 'string' } }, name: 'one_open_booking_per_slot' },
+);
+cabRequestSchema.index(
+  { shiftDayKey: 1 },
+  { unique: true, partialFilterExpression: { shiftDayKey: { $type: 'string' } }, name: 'one_booking_per_shift_day' },
 );
 cabRequestSchema.index({ officeLocation: 1, travelDate: 1, status: 1 });
 
@@ -109,6 +127,10 @@ const cabAssignmentSchema = new Schema(
     unacknowledgedAlertedAt: { type: Date },
     // Client-supplied Idempotency-Key so a retried "assign" click cannot double-assign.
     requestKey: { type: String },
+    // Shared trip: several rides assigned together to one cab. Rides of the same trip may overlap
+    // in time (they ride together); the name is the coordinator's label, e.g. "Kondapur & Madhapur Cab".
+    tripId: { type: String, index: true },
+    tripName: { type: String, trim: true, maxlength: 120 },
   },
   { timestamps: true },
 );

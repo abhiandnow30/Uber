@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Clock, Home } from 'lucide-react';
+import { Home } from 'lucide-react';
 import { Alert, Button, Card, DescriptionList, Input, PageHeader, Select, StatusBadge, Textarea, useToast } from '../../components/ui';
 import { errorMessage, patch, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -54,8 +54,7 @@ export default function Account() {
             ]}
           />
         </Card>
-        {me.user.role === 'EMPLOYEE' && <ShiftCard />}
-        {me.user.role === 'EMPLOYEE' && <HomeAddressCard />}
+        {me.user.role === 'EMPLOYEE' && <CabDetailsCard />}
         {me.user.role !== 'DRIVER' && me.user.role !== 'COORDINATOR' && !(me.user.role === 'EMPLOYEE' && sso?.employeesMicrosoftOnly) && (
           <Card title="Change password">
             <form onSubmit={submit} className="space-y-4">
@@ -73,30 +72,40 @@ export default function Account() {
   );
 }
 
-/** Employees save the shift they usually work; it is pre-selected on the cab request form. */
-function ShiftCard() {
+/**
+ * Employees keep their usual shift and present address together: the shift is pre-selected on
+ * the cab request form, and the address is where the transport team plans the cab to.
+ */
+function CabDetailsCard() {
   const { me, refresh } = useAuth();
   const toast = useToast();
   const { data: policy } = usePolicy();
-  const saved = ((me?.profile ?? {}) as { defaultShift?: string }).defaultShift ?? '';
-  const [shift, setShift] = useState(saved);
-  const [error, setError] = useState('');
+  const profile = (me?.profile ?? {}) as { defaultShift?: string; homeAddress?: string };
+  const savedShift = profile.defaultShift ?? '';
+  const savedAddress = profile.homeAddress ?? '';
+  const [shift, setShift] = useState(savedShift);
+  const [address, setAddress] = useState(savedAddress);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    setShift(saved);
-  }, [saved]);
+  useEffect(() => setShift(savedShift), [savedShift]);
+  useEffect(() => setAddress(savedAddress), [savedAddress]);
   const shifts = policy?.shifts.filter((s) => s.active) ?? [];
+
+  const shiftChanged = shift !== savedShift;
+  const addressChanged = address.trim() !== savedAddress;
+  const addressOk = address.trim().length >= 5 || (!addressChanged && !savedAddress);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    setError('');
+    setErrors({});
     try {
-      await patch('/me/profile', { defaultShift: shift });
+      await patch('/me/profile', { ...(shiftChanged ? { defaultShift: shift } : {}), ...(addressChanged ? { homeAddress: address.trim() } : {}) });
       await refresh();
-      toast.success('Shift saved', 'It will be selected automatically when you request a cab.');
+      toast.success('Cab details saved', 'Your shift is selected and your address is used when you request a cab.');
     } catch (err) {
-      setError(fieldErrors(err).defaultShift ?? errorMessage(err));
+      const f = fieldErrors(err);
+      setErrors(Object.keys(f).length ? f : { form: errorMessage(err) });
     } finally {
       setBusy(false);
     }
@@ -106,13 +115,13 @@ function ShiftCard() {
     <Card
       title={
         <span className="flex items-center gap-2">
-          <Clock className="h-4 w-4" aria-hidden /> My shift
+          <Home className="h-4 w-4" aria-hidden /> Cab details
         </span>
       }
     >
       <form onSubmit={save} className="space-y-4">
-        {!saved && <Alert tone="info">Save your shift so it is selected for you when you request a cab.</Alert>}
-        <Select label="Shift" value={shift} onChange={(e) => setShift(e.target.value)} error={error}>
+        {(!savedShift || !savedAddress) && <Alert tone="info">Save your shift and present address so cab requests take just a tap.</Alert>}
+        <Select label="My shift" value={shift} onChange={(e) => setShift(e.target.value)} error={errors.defaultShift}>
           <option value="">No default shift</option>
           {shifts.map((s) => (
             <option key={s.code} value={s.code}>
@@ -121,56 +130,8 @@ function ShiftCard() {
             </option>
           ))}
         </Select>
-        <p className="text-xs text-slate-500">You can still pick a different shift or cab time for a single ride on the request form.</p>
-        <Button type="submit" loading={busy} disabled={shift === saved}>
-          Save shift
-        </Button>
-      </form>
-    </Card>
-  );
-}
-
-/** Employees maintain their own home address; it pre-fills the cab request form. */
-function HomeAddressCard() {
-  const { me, refresh } = useAuth();
-  const toast = useToast();
-  const profile = (me?.profile ?? {}) as { homeAddress?: string };
-  const [address, setAddress] = useState(profile.homeAddress ?? '');
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    setAddress(profile.homeAddress ?? '');
-  }, [profile.homeAddress]);
-  const dirty = address.trim() !== (profile.homeAddress ?? '');
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setErrors({});
-    try {
-      await patch('/me/profile', { homeAddress: address.trim() });
-      await refresh();
-      toast.success('Present address saved', 'It will be filled in automatically when you request a cab.');
-    } catch (err) {
-      const f = fieldErrors(err);
-      setErrors(Object.keys(f).length ? f : { homeAddress: errorMessage(err) });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Card
-      title={
-        <span className="flex items-center gap-2">
-          <Home className="h-4 w-4" aria-hidden /> Present address
-        </span>
-      }
-    >
-      <form onSubmit={save} className="space-y-4">
-        {!profile.homeAddress && <Alert tone="info">Add your present address so your cab requests are filled in for you.</Alert>}
         <Textarea
-          label="Address"
+          label="Present address"
           required
           maxLength={300}
           autoComplete="street-address"
@@ -179,9 +140,12 @@ function HomeAddressCard() {
           onChange={(e) => setAddress(e.target.value)}
           error={errors.homeAddress}
         />
-        <p className="text-xs text-slate-500">Only you and administrators can see your saved address. The transport team and your driver see only the pickup and drop-off points of your rides.</p>
-        <Button type="submit" loading={busy} disabled={!dirty || address.trim().length < 5}>
-          Save address
+        <p className="text-xs text-slate-500">
+          You can pick a different shift or cab time for a single ride on the request form. Your address is used as the pickup or drop-off of your rides, so the transport team and your driver see it on those rides.
+        </p>
+        {errors.form && <Alert tone="error">{errors.form}</Alert>}
+        <Button type="submit" loading={busy} disabled={(!shiftChanged && !addressChanged) || !addressOk}>
+          Save
         </Button>
       </form>
     </Card>

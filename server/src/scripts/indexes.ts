@@ -59,6 +59,22 @@ export async function syncIndexes() {
   // Coordinators are no longer limited by shift.
   await mongoose.connection.db!.collection('coordinators').updateMany({ shifts: { $exists: true } }, { $unset: { shifts: '' } });
 
+  // Bookings made before IN/OUT existed: the shift's direction decides. For IN (home → office) the
+  // shift start is the reach-office time; rides still waiting for a cab get their pickup set by the
+  // transport team when assigned. Idempotent: only bookings without a direction are touched.
+  const bookings = mongoose.connection.db!.collection('cabrequests');
+  if (await bookings.countDocuments({ direction: { $exists: false } }, { limit: 1 })) {
+    const pol = await policies.findOne({ key: 'global' }).lean<{ shifts?: Array<{ code: string; direction?: string; startTime?: string }> } | null>();
+    const inShifts = (pol?.shifts ?? []).filter((s) => s.direction === 'TO_OFFICE');
+    for (const s of inShifts) {
+      const base = { direction: { $exists: false }, shift: s.code };
+      await bookings.updateMany({ ...base, status: { $in: ['REQUESTED', 'APPROVED', 'PENDING_APPROVAL'] } }, { $set: { direction: 'IN', reportBy: s.startTime, pickupTimeSet: false } });
+      await bookings.updateMany(base, { $set: { direction: 'IN', reportBy: s.startTime, pickupTimeSet: true } });
+    }
+    await bookings.updateMany({ direction: { $exists: false } }, { $set: { direction: 'OUT', pickupTimeSet: true } });
+    logger.info('Bookings marked IN (to office) / OUT (to home)');
+  }
+
   // Drivers saved before mobile sign-in existed have no phoneKey yet.
   const drivers = mongoose.model('Driver');
   for (const d of await drivers.find({ phoneKey: { $exists: false } }, { phone: 1 }).lean<Array<{ _id: unknown; phone?: string }>>()) {

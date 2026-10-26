@@ -7,14 +7,15 @@ import { homeFor, useAuth } from '../../lib/auth';
 import { fieldErrors } from '../../lib/hooks';
 import AuthShell from './AuthShell';
 
-type Context = { email: string; fullName: string; offices: Array<{ code: string; name: string }>; routes: string[] };
+type Context = { email: string; fullName: string; offices: Array<{ code: string; name: string }> };
 
 /** First Microsoft sign-in for someone not yet in the system: they complete their own profile. */
 export default function Register() {
   const navigate = useNavigate();
   const { refresh } = useAuth();
   const ctx = useQuery({ queryKey: ['sso-registration'], queryFn: () => get<Context>('/auth/sso/registration'), retry: false });
-  const [form, setForm] = useState({ employeeId: '', fullName: '', phone: '', officeLocation: '', route: '', homeAddress: '' });
+  // Only the address is asked for the cab; an admin assigns the employee's route (cab) afterwards.
+  const [form, setForm] = useState({ employeeId: '', fullName: '', phone: '', officeLocation: '', homeAddress: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -75,21 +76,6 @@ export default function Register() {
               ))}
             </Select>
           </div>
-          <Input
-            label="Route"
-            list="registration-routes"
-            value={form.route}
-            onChange={set('route')}
-            error={errors.route}
-            hint="Pick your cab route from the list, or type it if it's not there"
-            maxLength={120}
-            required
-          />
-          <datalist id="registration-routes">
-            {ctx.data.routes.map((r) => (
-              <option key={r} value={r} />
-            ))}
-          </datalist>
           <Textarea
             label="Present address"
             autoComplete="street-address"
@@ -99,6 +85,7 @@ export default function Register() {
             error={errors.homeAddress}
             maxLength={300}
             required
+            hint="The transport team assigns your cab route from this address."
           />
           {error && !Object.keys(errors).length && <Alert tone="error">{error}</Alert>}
           <Button type="submit" size="lg" className="w-full" loading={busy} disabled={!complete}>

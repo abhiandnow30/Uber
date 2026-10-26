@@ -38,23 +38,97 @@ describe('company shifts: one cab per shift, 8 PM - 6 AM', () => {
     expect(await CabRequest.findById(night.body.booking._id).lean()).toMatchObject({ travelDate: futureDate(4), pickupTime: '21:00' });
   });
 
-  it('employees can change the cab time; it stays on the day closest to the shift cab', async () => {
+  it('employees enter their shift times; the times decide IN (to office) or OUT (home)', async () => {
+    await useCompanyShifts();
+    const emp = await makeEmployee();
+    await emp.employee.updateOne({ $set: { homeAddress: 'Flat 1, Kondapur, Hyderabad' } });
+    const book = (d: number, o: Record<string, unknown>) => {
+      const { pickupLocation: _p, dropLocation: _d, ...rest } = bookingInput({ travelDate: futureDate(d), ...o });
+      return emp.client!.post('/api/me/bookings', rest);
+    };
+
+    // 9 PM - 6 AM moved to 10 PM - 7 AM: still IN — reach the office by 10 PM, pickup set later by the transport team
+    const inRide = (await book(2, { shift: '9PM-6AM', shiftStart: '22:00', shiftEnd: '07:00' }).expect(201)).body.booking;
+    expect(inRide).toMatchObject({ direction: 'IN', reportBy: '22:00', pickupTimeSet: false, shiftStart: '22:00', shiftEnd: '07:00', travelDate: futureDate(2) });
+    expect(inRide.dropLocation).toMatch(/Hyderabad HQ/);
+
+    // 7 PM - 4 AM moved to 8 PM - 5 AM: OUT — the cab leaves the office at 5 AM the next morning
+    const outRide = (await book(3, { shift: '7PM-4AM', shiftStart: '20:00', shiftEnd: '05:00' }).expect(201)).body.booking;
+    expect(outRide).toMatchObject({ direction: 'OUT', pickupTime: '05:00', pickupTimeSet: true, travelDate: nextDay(futureDate(3)) });
+    expect(outRide.pickupLocation).toMatch(/Hyderabad HQ/);
+
+    // 8 PM - 5 PM next day has no cab: too early to reach the office by 8 PM, and it ends after cab hours
+    const none = await book(4, { shift: '9PM-6AM', shiftStart: '20:00', shiftEnd: '17:00' });
+    expect(none.status).toBe(422);
+    expect(none.body.error.code).toBe('NO_CAB_FOR_SHIFT');
+  });
+
+  it('IN rides: the coordinator sets the pickup time when assigning, before the reach-office time', async () => {
+    await useCompanyShifts();
+    const { makeCoordinator, makeDriver } = await import('./helpers.js');
+    const coord = await makeCoordinator(['HYD']);
+    const drv = await makeDriver({ capacity: 4 });
+    const emp = await makeEmployee();
+    await emp.employee.updateOne({ $set: { homeAddress: 'Flat 2, Gachibowli, Hyderabad' } });
+    const { pickupLocation: _p, dropLocation: _d, ...input } = bookingInput({ travelDate: futureDate(2), shift: '9PM-6AM' });
+    const ride = (await emp.client!.post('/api/me/bookings', input).expect(201)).body.booking;
+    const trip = (time?: string) => coord.client.post('/api/ops/trips', { bookingIds: [ride._id], driverId: drv.driver._id, vehicleId: drv.vehicle._id, ...(time ? { pickupTime: time } : {}) });
+
+    expect((await trip()).body.error.code).toBe('PICKUP_TIME_REQUIRED');
+    expect((await trip('21:30')).body.error.code).toBe('PICKUP_TIME_INVALID'); // after 9 PM is too late
+    expect((await trip('16:30')).body.error.code).toBe('PICKUP_TIME_INVALID'); // more than 4 hours early
+    // before cab hours (8 PM) is fine: a long ride from home needs an earlier pickup
+    await trip('19:15').expect(201);
+    const saved = await CabRequest.findById(ride._id).lean();
+    expect(saved).toMatchObject({ status: 'ASSIGNED', pickupTime: '19:15', pickupTimeSet: true, travelDate: futureDate(2), reportBy: '21:00' });
+    expect(DateTime.fromJSDate(saved!.scheduledPickupAt).setZone('Asia/Kolkata').toFormat('yyyy-MM-dd HH:mm')).toBe(`${futureDate(2)} 19:15`);
+  });
+
+  it('one cab per shift day: an after-midnight cab counts for the day the shift started', async () => {
     await useCompanyShifts();
     const emp = await makeEmployee();
     const shiftDate = futureDate(2);
 
-    // 7 PM - 4 AM, staying late: 5:00 AM the morning after
-    const late = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: shiftDate, shift: '7PM-4AM', changedPickupTime: '05:00' })).expect(201);
-    expect(await CabRequest.findById(late.body.booking._id).lean()).toMatchObject({ shiftDate, travelDate: nextDay(shiftDate), pickupTime: '05:00' });
+    // 7 PM - 4 AM shift on day D: the cab is at 4 AM on D+1, but it is D's cab
+    await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: shiftDate, shift: '7PM-4AM' })).expect(201);
+    // no second cab for the same shift day, even on another shift
+    const again = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: shiftDate, shift: '1PM-10PM' }));
+    expect(again.status).toBe(409);
+    expect(again.body.error.code).toBe('SHIFT_DAY_BOOKED');
+    // the D+1 shift is a new day, although D's cab also runs on D+1
+    await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: nextDay(shiftDate), shift: '7PM-4AM' })).expect(201);
+  });
 
-    // 1 PM - 10 PM, leaving at 11:30 PM: still the same evening
-    const evening = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(3), shift: '1PM-10PM', changedPickupTime: '23:30' })).expect(201);
-    expect(await CabRequest.findById(evening.body.booking._id).lean()).toMatchObject({ travelDate: futureDate(3), pickupTime: '23:30' });
+  it('the route is not asked: it is the saved address and the office, in the shift direction', async () => {
+    await useCompanyShifts();
+    const emp = await makeEmployee();
+    const noRoute = (o: Record<string, unknown>) => {
+      const { pickupLocation: _p, dropLocation: _d, ...rest } = bookingInput(o);
+      return rest;
+    };
+    const missing = await emp.client!.post('/api/me/bookings', noRoute({ travelDate: futureDate(2), shift: '7PM-4AM' }));
+    expect(missing.body.error.code).toBe('HOME_ADDRESS_REQUIRED');
 
-    // still only inside the cab hours
-    const day = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(4), shift: '7PM-4AM', changedPickupTime: '07:00' }));
-    expect(day.status).toBe(422);
-    expect(day.body.error.code).toBe('OUTSIDE_CAB_HOURS');
+    await emp.employee.updateOne({ $set: { homeAddress: 'Flat 1, Kondapur, Hyderabad' } });
+    const office = `${DEFAULT_OFFICES[0].name}, ${DEFAULT_OFFICES[0].address}`;
+    const home = await emp.client!.post('/api/me/bookings', noRoute({ travelDate: futureDate(2), shift: '7PM-4AM' })).expect(201);
+    expect(home.body.booking).toMatchObject({ pickupLocation: office, dropLocation: 'Flat 1, Kondapur, Hyderabad' });
+    const toWork = await emp.client!.post('/api/me/bookings', noRoute({ travelDate: futureDate(3), shift: '9PM-6AM' })).expect(201);
+    expect(toWork.body.booking).toMatchObject({ pickupLocation: 'Flat 1, Kondapur, Hyderabad', dropLocation: office });
+  });
+
+  it('without a shift, a cab before 6 AM counts for the previous work day', async () => {
+    await useCompanyShifts();
+    await Policy.updateOne({ key: 'global' }, { $set: { 'booking.requireShift': false } });
+    invalidatePolicyCache();
+    const emp = await makeEmployee();
+    const day = futureDate(2);
+    // 1 AM on D+1 is D's cab, so a 9 PM cab on D is a second cab for D
+    await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: nextDay(day), pickupTime: '01:00' })).expect(201);
+    const second = await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: day, pickupTime: '21:00' }));
+    expect(second.body.error.code).toBe('SHIFT_DAY_BOOKED');
+    // 9 PM on D+1 starts D+1's work day
+    await emp.client!.post('/api/me/bookings', bookingInput({ travelDate: nextDay(day), pickupTime: '21:00' })).expect(201);
   });
 
   it('employees save a default shift on their account', async () => {

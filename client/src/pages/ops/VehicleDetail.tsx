@@ -5,8 +5,8 @@ import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Card, DataTable, DescriptionList, EmptyState, ErrorState, Input, Modal, PageHeader, Select, Spinner, StatusBadge, Tabs, Textarea, useToast, type Column } from '../../components/ui';
 import { errorMessage, get, post } from '../../lib/api';
 import { fieldErrors } from '../../lib/hooks';
-import { fmtDate, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
-import { ExpiryText } from './OpsDashboard';
+import { fmt12h, fmtDate, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
+import { DriverPicker } from './Drivers';
 import { VEHICLE_STATUSES, VehicleFormModal, type VehicleRow } from './Vehicles';
 
 type Person = { _id: string; name: string } | null | undefined;
@@ -116,7 +116,7 @@ export default function VehicleDetail() {
 
   const tripCols: Column<VehicleDetailData['assignments'][number]>[] = [
     { key: 'ref', header: 'Booking', render: (a) => (a.booking ? <Link className="font-medium text-indigo-600 hover:underline" to={`/ops/bookings/${a.booking._id}`}>{a.booking.reference}</Link> : '—') },
-    { key: 'when', header: 'Pickup', render: (a) => <span className="whitespace-nowrap">{a.booking ? `${fmtTravelDate(a.booking.travelDate)} ${a.booking.pickupTime}` : fmtDateTime(a.scheduledPickupAt)}</span> },
+    { key: 'when', header: 'Pickup', render: (a) => <span className="whitespace-nowrap">{a.booking ? `${fmtTravelDate(a.booking.travelDate)} ${fmt12h(a.booking.pickupTime)}` : fmtDateTime(a.scheduledPickupAt)}</span> },
     { key: 'driver', header: 'Driver', render: (a) => (a.driver ? <Link className="text-indigo-600 hover:underline" to={`/ops/drivers/${a.driver._id}`}>{a.driver.fullName} ({a.driver.driverCode})</Link> : '—') },
     { key: 'asg', header: 'Assignment', render: (a) => <StatusBadge status={a.status} /> },
     { key: 'bst', header: 'Booking status', render: (a) => <StatusBadge status={a.booking?.status} /> },
@@ -167,25 +167,22 @@ export default function VehicleDetail() {
                 ['Capacity', `${v.capacity} passengers`],
                 ['Office', v.officeLocation],
                 ['Status', <StatusBadge key="s" status={v.status} />],
-                ['Insurance expiry', <ExpiryText key="i" iso={v.insuranceExpiry} />],
-                ['Maintenance notes', v.maintenanceNotes || '—'],
-                ['Maintenance due', fmtDate(v.maintenanceDueAt)],
                 ['Added', fmtDateTime(v.createdAt)],
               ]}
             />
           </Card>
-          <Card title="Linked driver">
+          <Card title="Driver">
             {v.currentDriver ? (
-              <p className="text-sm">
+              <p className="mb-3 text-sm">
                 <Link className="font-medium text-indigo-600 hover:underline" to={`/ops/drivers/${v.currentDriver._id}`}>
                   {v.currentDriver.fullName}
                 </Link>{' '}
                 ({v.currentDriver.driverCode}){v.currentDriver.phone ? ` · ${v.currentDriver.phone}` : ''}
               </p>
             ) : (
-              <p className="text-sm text-slate-500">No driver linked.</p>
+              <p className="mb-3 text-sm text-slate-500">No driver assigned to this cab.</p>
             )}
-            <p className="mt-3 text-xs text-slate-500">Link a driver from the Drivers page or the driver&apos;s profile.</p>
+            <DriverPicker vehicle={v} />
           </Card>
         </div>
         <Card>

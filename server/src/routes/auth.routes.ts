@@ -46,8 +46,8 @@ authRouter.post('/login', authLimiter, async (req, res) => {
 });
 
 authRouter.post('/driver-login', authLimiter, async (req, res) => {
-  const input = body(z.object({ phone: z.string().trim().min(6).max(25), vehicleLast4: z.string().trim().min(4).max(10) }), req);
-  const { user, session } = await driverPhoneLogin(input.phone, input.vehicleLast4, meta(req));
+  const input = body(z.object({ phone: z.string().trim().min(6).max(25), password: z.string().trim().min(4).max(10) }), req);
+  const { user, session } = await driverPhoneLogin(input.phone, input.password, meta(req));
   setAuthCookies(res, session.token, session.csrfToken, session.expiresAt);
   res.json({ user: { id: user._id, name: user.name, role: user.role }, csrfToken: session.csrfToken });
 });

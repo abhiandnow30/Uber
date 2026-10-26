@@ -27,54 +27,61 @@ export type DriverRow = {
 };
 
 /**
- * The driver's vehicle as a dropdown of their current vehicle plus every free, active vehicle in
- * their office. Choosing one links it straight away (the server ends both previous links).
+ * Drivers are assigned to cabs (not the other way round): the cab's driver as a dropdown of its
+ * current driver plus every active driver in its office. Choosing one links them straight away
+ * (the server ends both previous links).
  */
-export function VehiclePicker({ driver, className }: { driver: Pick<DriverRow, '_id' | 'fullName' | 'officeLocation' | 'currentVehicle'>; className?: string }) {
+export function DriverPicker({ vehicle, className }: { vehicle: Pick<VehicleRow, '_id' | 'registrationNumber' | 'officeLocation' | 'status'> & { currentDriver?: { _id: string; fullName: string } | null }; className?: string }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   // Shared cache key: every picker on the page reuses one request.
-  const vehicles = useQuery({ queryKey: ['ops', 'vehicles', 'link-options'], queryFn: () => get<Paged<VehicleRow>>('/ops/vehicles?pageSize=100') });
-  const current = driver.currentVehicle;
-  const choices = (vehicles.data?.items ?? []).filter((v) => v.status === 'ACTIVE' && v.officeLocation === driver.officeLocation && v._id !== current?._id);
-  const free = choices.filter((v) => !v.currentDriver);
-  const taken = choices.filter((v) => v.currentDriver);
+  const drivers = useQuery({ queryKey: ['ops', 'drivers', 'link-options'], queryFn: () => get<Paged<DriverRow>>('/ops/drivers?pageSize=100&sort=fullName') });
+  const current = vehicle.currentDriver;
+  const choices = (drivers.data?.items ?? []).filter((d) => d.employmentStatus === 'ACTIVE' && d.officeLocation === vehicle.officeLocation && d._id !== current?._id);
+  const free = choices.filter((d) => !d.currentVehicle);
+  const busyElsewhere = choices.filter((d) => d.currentVehicle);
 
-  const link = async (vehicleId: string) => {
-    if (!vehicleId || vehicleId === current?._id) return;
-    const v = choices.find((x) => x._id === vehicleId);
-    if (v?.currentDriver && !window.confirm(`${v.registrationNumber} is linked to ${v.currentDriver.fullName}. Move it to ${driver.fullName}? ${v.currentDriver.fullName} will be left without a vehicle.`)) return;
+  const link = async (driverId: string) => {
+    if (!driverId || driverId === current?._id) return;
+    const d = choices.find((x) => x._id === driverId);
+    if (!d) return;
+    const notes = [
+      d.currentVehicle ? `${d.fullName} drives ${d.currentVehicle.registrationNumber} now and will move to this cab.` : '',
+      current ? `${current.fullName} will be left without a cab.` : '',
+    ].filter(Boolean);
+    if (notes.length && !window.confirm(`Assign ${d.fullName} to ${vehicle.registrationNumber}? ${notes.join(' ')}`)) return;
     setBusy(true);
     try {
-      await post('/ops/links', { driverId: driver._id, vehicleId });
-      toast.success('Vehicle linked', `${driver.fullName} → ${v?.registrationNumber ?? ''}`);
+      await post('/ops/links', { driverId, vehicleId: vehicle._id });
+      toast.success('Driver assigned', `${vehicle.registrationNumber} → ${d.fullName}`);
       qc.invalidateQueries({ queryKey: ['ops'] });
     } catch (err) {
-      toast.error('Could not link vehicle', errorMessage(err));
+      toast.error('Could not assign driver', errorMessage(err));
     } finally {
       setBusy(false);
     }
   };
 
+  const noDriverLabel = drivers.isLoading ? 'Loading…' : choices.length ? 'Assign a driver…' : 'No drivers in this office';
   return (
     <div className={className} onClick={(e) => e.stopPropagation()}>
-      <Select aria-label={`Vehicle for ${driver.fullName}`} value={current?._id ?? ''} onChange={(e) => link(e.target.value)} disabled={busy || vehicles.isLoading}>
-        {current ? <option value={current._id}>{current.registrationNumber}</option> : <option value="">{vehicles.isLoading ? 'Loading…' : choices.length ? 'Select a cab…' : 'No cabs in this office'}</option>}
+      <Select aria-label={`Driver for ${vehicle.registrationNumber}`} value={current?._id ?? ''} onChange={(e) => link(e.target.value)} disabled={busy || drivers.isLoading || vehicle.status !== 'ACTIVE'}>
+        {current ? <option value={current._id}>{current.fullName}</option> : <option value="">{vehicle.status !== 'ACTIVE' ? 'Cab not active' : noDriverLabel}</option>}
         {free.length > 0 && (
-          <optgroup label="Available cabs">
-            {free.map((v) => (
-              <option key={v._id} value={v._id}>
-                {v.registrationNumber}{v.model ? ` · ${v.model}` : ''} · {v.capacity} seats
+          <optgroup label="Without a cab">
+            {free.map((d) => (
+              <option key={d._id} value={d._id}>
+                {d.fullName} ({d.driverCode})
               </option>
             ))}
           </optgroup>
         )}
-        {taken.length > 0 && (
-          <optgroup label="Linked to another driver">
-            {taken.map((v) => (
-              <option key={v._id} value={v._id}>
-                {v.registrationNumber} · now {v.currentDriver!.fullName}
+        {busyElsewhere.length > 0 && (
+          <optgroup label="Driving another cab">
+            {busyElsewhere.map((d) => (
+              <option key={d._id} value={d._id}>
+                {d.fullName} · now {d.currentVehicle!.registrationNumber}
               </option>
             ))}
           </optgroup>
@@ -88,13 +95,14 @@ export const VERIFICATION = ['PENDING', 'VERIFIED', 'REJECTED', 'EXPIRED'];
 export const EMPLOYMENT = ['ACTIVE', 'INACTIVE', 'SUSPENDED'];
 export const AVAILABILITY = ['AVAILABLE', 'ASSIGNED', 'ON_TRIP', 'OFFLINE', 'SUSPENDED'];
 
-type DriverForm = { driverCode: string; fullName: string; phone: string; email: string; licenseNumber: string; licenseExpiry: string; officeLocation: string };
+// The Driver ID is generated by the server; drivers have no email (they sign in with their mobile number).
+type DriverForm = { fullName: string; phone: string; licenseNumber: string; licenseExpiry: string; officeLocation: string };
 
 /** Create (no `driver`) or edit an existing driver. */
 export function DriverFormModal({ open, onClose, driver, onSaved }: { open: boolean; onClose: () => void; driver?: (DriverRow & { user?: { status: string } | null }) | null; onSaved?: (id: string) => void }) {
   const { offices } = useOpsOffices();
   const editing = !!driver;
-  const blank: DriverForm = { driverCode: '', fullName: '', phone: '', email: '', licenseNumber: '', licenseExpiry: '', officeLocation: offices.length === 1 ? offices[0].code : '' };
+  const blank: DriverForm = { fullName: '', phone: '', licenseNumber: '', licenseExpiry: '', officeLocation: offices.length === 1 ? offices[0].code : '' };
   const [f, setF] = useState<DriverForm>(blank);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState('');
@@ -105,10 +113,8 @@ export function DriverFormModal({ open, onClose, driver, onSaved }: { open: bool
     setF(
       driver
         ? {
-            driverCode: driver.driverCode,
             fullName: driver.fullName,
             phone: driver.phone,
-            email: driver.email ?? '',
             licenseNumber: driver.licenseNumber,
             licenseExpiry: toDateInput(driver.licenseExpiry),
             officeLocation: driver.officeLocation,
@@ -124,14 +130,12 @@ export function DriverFormModal({ open, onClose, driver, onSaved }: { open: bool
   );
 
   const set = (k: keyof DriverForm) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
-  const licenseChanged = editing && (f.licenseNumber.trim().toUpperCase() !== driver!.licenseNumber || f.licenseExpiry !== toDateInput(driver!.licenseExpiry));
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setErrors({});
     setFormError('');
-    const { fullName, phone, email, licenseNumber, licenseExpiry, officeLocation } = f;
-    const body: Record<string, unknown> = editing ? { fullName, phone, email, licenseNumber, licenseExpiry, officeLocation } : { ...f };
+    const body: Record<string, unknown> = { ...f };
     try {
       const r = await save.mutateAsync(body);
       onClose();
@@ -161,17 +165,8 @@ export function DriverFormModal({ open, onClose, driver, onSaved }: { open: bool
     >
       <form id="driver-form" onSubmit={submit} className="space-y-4" noValidate>
         <div className="grid gap-4 sm:grid-cols-2">
-          {!editing && <Input label="Driver ID" required value={f.driverCode} onChange={(e) => set('driverCode')(e.target.value.toUpperCase())} error={errors.driverCode} hint="2–20 letters/digits, e.g. DRV-014" />}
           <Input label="Full name" required value={f.fullName} onChange={(e) => set('fullName')(e.target.value)} error={errors.fullName} autoComplete="off" />
           <Input label="Mobile number" required type="tel" value={f.phone} onChange={(e) => set('phone')(e.target.value)} error={errors.phone} hint="The driver signs in with this number" />
-          <Input
-            label="Email (optional)"
-            type="email"
-            value={f.email}
-            onChange={(e) => set('email')(e.target.value)}
-            error={errors.email}
-            hint="Contact only; drivers don't sign in with email"
-          />
           <Input label="License number" required value={f.licenseNumber} onChange={(e) => set('licenseNumber')(e.target.value.toUpperCase())} error={errors.licenseNumber} />
           <Input label="License expiry" required type="date" value={f.licenseExpiry} onChange={(e) => set('licenseExpiry')(e.target.value)} error={errors.licenseExpiry} />
           <Select label="Office" required value={f.officeLocation} onChange={(e) => set('officeLocation')(e.target.value)} error={errors.officeLocation}>
@@ -186,15 +181,10 @@ export function DriverFormModal({ open, onClose, driver, onSaved }: { open: bool
         {!editing && (
           <>
             <Alert tone="info">
-              The driver signs in on their phone with this <strong>mobile number</strong> and the <strong>last 4 characters of their vehicle number</strong>, once you link them to a vehicle. They can be
-              assigned rides after their first sign-in. New drivers start with <strong>pending verification</strong>: an administrator must verify their documents before they can be assigned trips.
+              A Driver ID (like DRV003) is assigned automatically, and you can assign the driver to rides straight away. The driver signs in on their phone with this <strong>mobile number</strong>; the password
+              is its <strong>first 4 digits</strong>. They then see the rides assigned to them.
             </Alert>
           </>
-        )}
-        {licenseChanged && driver?.verificationStatus === 'VERIFIED' && (
-          <Alert tone="warn" title="Re-verification required">
-            Changing license details resets document verification to pending. The driver cannot receive new assignments until an administrator verifies them again.
-          </Alert>
         )}
         {formError && <Alert tone="error">{formError}</Alert>}
       </form>
@@ -222,7 +212,18 @@ export default function Drivers() {
     { key: 'license', header: 'License expiry', sortKey: 'licenseExpiry', render: (d) => <ExpiryText iso={d.licenseExpiry} /> },
     { key: 'avail', header: 'Availability', sortKey: 'availability', render: (d) => <StatusBadge status={d.availability} /> },
     { key: 'duty', header: 'On duty', className: 'hidden 2xl:table-cell', render: (d) => (d.onDuty ? <span className="text-emerald-700">Yes</span> : <span className="text-slate-400">No</span>) },
-    { key: 'vehicle', header: 'Current vehicle', render: (d) => <VehiclePicker driver={d} className="min-w-[11rem]" /> },
+    {
+      key: 'vehicle',
+      header: 'Cab',
+      render: (d) =>
+        d.currentVehicle ? (
+          <Link to={`/ops/vehicles/${d.currentVehicle._id}`} onClick={(e) => e.stopPropagation()} className="whitespace-nowrap font-mono text-sm text-indigo-600 hover:underline">
+            {d.currentVehicle.registrationNumber}
+          </Link>
+        ) : (
+          <span className="text-slate-400">No cab</span>
+        ),
+    },
     { key: 'active', header: 'Active rides', render: (d) => d.activeAssignments ?? 0, className: 'hidden text-center 2xl:table-cell' },
     { key: 'login', header: 'Login', render: (d) => (d.user ? <StatusBadge status={d.user.status} /> : <span className="text-xs text-slate-400">No login</span>) },
   ];

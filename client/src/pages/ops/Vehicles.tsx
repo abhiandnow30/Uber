@@ -1,11 +1,12 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, Textarea, type Column } from '../../components/ui';
+import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, type Column } from '../../components/ui';
 import { errorMessage, patch, post } from '../../lib/api';
 import { fieldErrors, useAction, useListState, usePaged } from '../../lib/hooks';
 import { humanize } from '../../lib/format';
-import { ExpiryText, OfficeSelect, toDateInput, useOpsOffices } from './OpsDashboard';
+import { DriverPicker } from './Drivers';
+import { OfficeSelect, useOpsOffices } from './OpsDashboard';
 
 export type VehicleRow = {
   _id: string;
@@ -24,13 +25,15 @@ export type VehicleRow = {
 
 export const VEHICLE_STATUSES = ['ACTIVE', 'INACTIVE', 'MAINTENANCE'];
 
-type VehicleForm = { registrationNumber: string; capacity: string; officeLocation: string; insuranceExpiry: string; maintenanceNotes: string };
+// A cab is identified by its registration number; seats is the only other thing needed to assign it.
+// The office decides which coordinators see it and is only asked when there is more than one.
+type VehicleForm = { registrationNumber: string; capacity: string; officeLocation: string };
 
 /** Create (no `vehicle`) or edit an existing vehicle. */
 export function VehicleFormModal({ open, onClose, vehicle, onSaved }: { open: boolean; onClose: () => void; vehicle?: VehicleRow | null; onSaved?: (id: string) => void }) {
   const { offices } = useOpsOffices();
   const editing = !!vehicle;
-  const [f, setF] = useState<VehicleForm>({ registrationNumber: '', capacity: '4', officeLocation: '', insuranceExpiry: '', maintenanceNotes: '' });
+  const [f, setF] = useState<VehicleForm>({ registrationNumber: '', capacity: '4', officeLocation: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState('');
   useEffect(() => {
@@ -43,10 +46,8 @@ export function VehicleFormModal({ open, onClose, vehicle, onSaved }: { open: bo
             registrationNumber: vehicle.registrationNumber,
             capacity: String(vehicle.capacity),
             officeLocation: vehicle.officeLocation,
-            insuranceExpiry: toDateInput(vehicle.insuranceExpiry),
-            maintenanceNotes: vehicle.maintenanceNotes ?? '',
           }
-        : { registrationNumber: '', capacity: '4', officeLocation: offices.length === 1 ? offices[0].code : '', insuranceExpiry: '', maintenanceNotes: '' },
+        : { registrationNumber: '', capacity: '4', officeLocation: offices.length === 1 ? offices[0].code : '' },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, vehicle]);
@@ -61,10 +62,8 @@ export function VehicleFormModal({ open, onClose, vehicle, onSaved }: { open: bo
     e.preventDefault();
     setErrors({});
     setFormError('');
-    const { registrationNumber, maintenanceNotes, capacity, ...rest } = f;
-    const body: Record<string, unknown> = { ...rest, capacity: Number(capacity) };
-    if (editing) body.maintenanceNotes = maintenanceNotes;
-    else body.registrationNumber = registrationNumber;
+    const body: Record<string, unknown> = { capacity: Number(f.capacity), officeLocation: f.officeLocation };
+    if (!editing) body.registrationNumber = f.registrationNumber;
     try {
       const r = await save.mutateAsync(body);
       onClose();
@@ -95,21 +94,29 @@ export function VehicleFormModal({ open, onClose, vehicle, onSaved }: { open: bo
       <form id="vehicle-form" onSubmit={submit} className="space-y-4" noValidate>
         <div className="grid gap-4 sm:grid-cols-2">
           {!editing && (
-            <Input label="Registration number" required value={f.registrationNumber} onChange={(e) => set('registrationNumber')(e.target.value.toUpperCase())} error={errors.registrationNumber} hint="e.g. KA01AB1234" />
+            <Input
+              label="Registration number"
+              required
+              autoComplete="off"
+              value={f.registrationNumber}
+              onChange={(e) => set('registrationNumber')(e.target.value.toUpperCase())}
+              error={errors.registrationNumber}
+              hint="As on the number plate, e.g. KA 01 CE 1234"
+            />
           )}
-          <Input label="Passenger capacity" required type="number" min={1} max={60} value={f.capacity} onChange={(e) => set('capacity')(e.target.value)} error={errors.capacity} />
-          <Select label="Office" required value={f.officeLocation} onChange={(e) => set('officeLocation')(e.target.value)} error={errors.officeLocation}>
-            <option value="">Select office…</option>
-            {offices.map((o) => (
-              <option key={o.code} value={o.code}>
-                {o.name} ({o.code})
-              </option>
-            ))}
-          </Select>
-          <Input label="Insurance expiry" type="date" value={f.insuranceExpiry} onChange={(e) => set('insuranceExpiry')(e.target.value)} error={errors.insuranceExpiry} />
+          <Input label="Seats (passengers)" required type="number" min={1} max={60} value={f.capacity} onChange={(e) => set('capacity')(e.target.value)} error={errors.capacity} />
+          {offices.length > 1 && (
+            <Select label="Office" required value={f.officeLocation} onChange={(e) => set('officeLocation')(e.target.value)} error={errors.officeLocation}>
+              <option value="">Select office…</option>
+              {offices.map((o) => (
+                <option key={o.code} value={o.code}>
+                  {o.name} ({o.code})
+                </option>
+              ))}
+            </Select>
+          )}
         </div>
-        {editing && <Textarea label="Maintenance notes" value={f.maintenanceNotes} onChange={(e) => set('maintenanceNotes')(e.target.value)} error={errors.maintenanceNotes} />}
-        <p className="text-xs text-slate-500">A vehicle with expired insurance is never offered for assignment.</p>
+        {!editing && <p className="text-xs text-slate-500">The registration number identifies the cab and can&apos;t be changed later.</p>}
         {formError && <Alert tone="error">{formError}</Alert>}
       </form>
     </Modal>
@@ -127,9 +134,7 @@ export default function Vehicles() {
     { key: 'reg', header: 'Reg. number', sortKey: 'registrationNumber', render: (v) => <Link to={`/ops/vehicles/${v._id}`} onClick={(e) => e.stopPropagation()} className="whitespace-nowrap font-medium text-indigo-600 hover:underline">{v.registrationNumber}</Link> },
     { key: 'cap', header: 'Seats', sortKey: 'capacity', render: (v) => v.capacity, className: 'text-center' },
     { key: 'status', header: 'Status', sortKey: 'status', render: (v) => <StatusBadge status={v.status} /> },
-    { key: 'notes', header: 'Maintenance', render: (v) => (v.maintenanceNotes ? <span className="line-clamp-2 max-w-56 text-xs" title={v.maintenanceNotes}>{v.maintenanceNotes}</span> : <span className="text-slate-400">—</span>) },
-    { key: 'ins', header: 'Insurance expiry', render: (v) => <ExpiryText iso={v.insuranceExpiry} /> },
-    { key: 'driver', header: 'Linked driver', render: (v) => (v.currentDriver ? <span className="whitespace-nowrap">{v.currentDriver.fullName} <span className="text-xs text-slate-500">({v.currentDriver.driverCode})</span></span> : <span className="text-slate-400">—</span>) },
+    { key: 'driver', header: 'Driver', render: (v) => <DriverPicker vehicle={v} className="min-w-[12rem]" /> },
     { key: 'office', header: 'Office', render: (v) => v.officeLocation },
   ];
 

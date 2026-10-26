@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { get } from './api';
+import { fmt12h } from './format';
 
 export type Office = { code: string; name: string; address?: string; timezone: string; active: boolean };
 export type Shift = { code: string; name: string; direction: string; startTime?: string; endTime?: string; defaultPickupTime?: string; active: boolean };
@@ -30,12 +31,7 @@ export const VEHICLE_TYPES = ['SEDAN', 'HATCHBACK', 'SUV', 'MUV', 'VAN', 'MINIBU
 export const BOOKING_STATUSES = ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'REJECTED', 'NO_SHOW'] as const;
 export const ACCOUNT_STATUSES = ['PENDING_ADMIN_REVIEW', 'INVITED', 'ACTIVE', 'INACTIVE', 'REJECTED', 'SUSPENDED'] as const;
 
-/** "22:00" -> "10:00 PM". */
-export function fmt12h(hhmm?: string) {
-  if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return hhmm ?? '';
-  const [h, m] = hhmm.split(':').map(Number);
-  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
-}
+export { fmt12h };
 
 const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 
@@ -54,3 +50,30 @@ export function cabFor(shift: Shift | undefined, shiftDate: string, time?: strin
 }
 
 export const DIRECTION_LABEL: Record<string, string> = { TO_OFFICE: 'Home → Office', FROM_OFFICE: 'Office → Home' };
+
+/** IN cabs need time for the pickup run: the shift must start this long after cab hours begin (as on the server). */
+export const IN_LEAD_MINUTES = 60;
+
+/**
+ * Which cab a shift gets from its times (same rule as the server): IN (home → office, reach by the
+ * start) when it starts from cab-hours start + 1 h to cab-hours end; OUT (office → home at the end)
+ * when it ends within cab hours, before they end.
+ */
+export function cabForShift(start: string, end: string, winStart?: string, winEnd?: string) {
+  if (!winStart || !winEnd) return { in: true, out: true };
+  const span = (toMin(winEnd) - toMin(winStart) + 1440) % 1440 || 1440;
+  const offset = (t: string) => (toMin(t) - toMin(winStart) + 1440) % 1440;
+  return { in: offset(start) >= IN_LEAD_MINUTES && offset(start) <= span, out: offset(end) < span };
+}
+
+/** "20:00" + 60 → "21:00" */
+export const addMinutesHHmm = (t: string, m: number) => {
+  const v = (toMin(t) + m + 1440) % 1440;
+  return `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`;
+};
+
+/** Pickup line for a booking: IN rides wait for the transport team to set it. */
+export function pickupLabel(b: { direction?: string; pickupTimeSet?: boolean; pickupTime: string; reportBy?: string }) {
+  if (b.direction === 'IN' && b.pickupTimeSet === false) return `Pickup time to be set · reach office by ${fmt12h(b.reportBy ?? b.pickupTime)}`;
+  return fmt12h(b.pickupTime);
+}
