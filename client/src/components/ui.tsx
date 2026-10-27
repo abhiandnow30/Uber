@@ -13,6 +13,7 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
+import { useUnsavedChanges } from '../lib/unsaved';
 import { humanize } from '../lib/format';
 
 export const cn = (...c: Array<string | false | null | undefined>) => c.filter(Boolean).join(' ');
@@ -451,15 +452,18 @@ export function ConfirmDialog({
       setBusy(false);
     }
   };
+  // A typed reason isn't thrown away without asking.
+  const guard = useUnsavedChanges(open && reason.trim().length > 0);
+  const close = () => guard(onClose);
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={title}
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button variant={tone} onClick={submit} loading={busy}>

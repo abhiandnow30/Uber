@@ -2,8 +2,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CheckCircle2, KeyRound, MapPin, Navigation, PlayCircle } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, Modal, Select, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
+import { Alert, Button, Card, DescriptionList, ErrorState, Modal, Select, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
 import { ApiError, errorMessage, get, post } from '../../lib/api';
+import { useUnsavedChanges } from '../../lib/unsaved';
 import { fmt12h, fmtDateTime, fmtTravelDate, mapsDirectionsUrl } from '../../lib/format';
 
 type Ride = {
@@ -175,7 +176,7 @@ export default function DriverRide() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notActive, setNotActive] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<'cancel' | 'complete' | null>(null);
+  const [dialog, setDialog] = useState<'cancel' | null>(null);
   const [note, setNote] = useState('');
   const [noteDirty, setNoteDirty] = useState(false);
   const [noteBusy, setNoteBusy] = useState(false);
@@ -221,7 +222,23 @@ export default function DriverRide() {
     }
   };
 
-  /** For ConfirmDialog: rethrow so the dialog shows the message inline. */
+  /** Complete in one tap, then back to the driver's dashboard. */
+  const complete = async () => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await post(`/driver/rides/${id}/complete`, {});
+      toast.success('Trip completed');
+      refresh();
+      navigate('/driver');
+    } catch (err) {
+      handleError(err);
+      setBusy(false);
+    }
+  };
+
+  /** For the cancel dialog: rethrow so it shows the message inline. */
   const confirmAction = async (path: string, success: string, payload: unknown) => {
     setActionError(null);
     try {
@@ -237,19 +254,22 @@ export default function DriverRide() {
     }
   };
 
-  const saveNote = async () => {
+  const saveNote = async (): Promise<boolean> => {
     setNoteBusy(true);
     try {
       await post(`/driver/rides/${id}/notes`, { note: note.trim() });
       toast.success('Note saved');
       setNoteDirty(false);
       refresh();
+      return true;
     } catch (err) {
       toast.error('Could not save note', errorMessage(err));
+      return false;
     } finally {
       setNoteBusy(false);
     }
   };
+  useUnsavedChanges(noteDirty && note.trim() !== (ride?.driverNotes ?? ''), saveNote);
 
   const back = (
     <Link to="/driver" className="inline-flex items-center gap-1 text-sm font-medium text-slate-600 hover:text-slate-900">
@@ -343,7 +363,7 @@ export default function DriverRide() {
       primary = (
         <div className="space-y-3">
           {navigateTo(b.dropLocation, 'Navigate to drop')}
-          <Button size="xl" variant="success" onClick={() => setDialog('complete')} icon={<CheckCircle2 className="h-6 w-6" aria-hidden />}>
+          <Button size="xl" variant="success" loading={busy} onClick={complete} icon={<CheckCircle2 className="h-6 w-6" aria-hidden />}>
             Complete trip
           </Button>
         </div>
@@ -451,17 +471,6 @@ export default function DriverRide() {
           confirmAction('cancel', reason === 'NO_SHOW' ? 'Ride closed as no-show' : 'Ride cancelled — the coordinator is informed', { reason, ...(note ? { note } : {}) }).then(() => refetch())
         }
       />
-      <ConfirmDialog
-        open={dialog === 'complete'}
-        onClose={() => setDialog(null)}
-        onConfirm={(notes) => confirmAction('complete', 'Trip completed', notes ? { notes } : {}).then(() => refetch())}
-        title="Complete this trip?"
-        message="Confirm the passenger has been dropped at the destination."
-        confirmLabel="Complete trip"
-        tone="primary"
-        reasonLabel="Trip notes (optional)"
-        reasonMinLength={0}
-      />
     </div>
   );
 }
@@ -484,6 +493,9 @@ function DriverCancelDialog({ open, arrived, onClose, onConfirm }: { open: boole
       setError('');
     }
   }, [open]);
+  // Saving here would mean cancelling the ride, so a chosen reason can only be kept or discarded.
+  const guard = useUnsavedChanges(open && (!!reason || !!note.trim()));
+  const close = () => guard(onClose);
   const submit = async () => {
     if (!reason) return setError('Choose a reason');
     if (reason === 'OTHER' && note.trim().length < 3) return setError('Say why the ride is cancelled');
@@ -501,12 +513,12 @@ function DriverCancelDialog({ open, arrived, onClose, onConfirm }: { open: boole
   return (
     <Modal
       open={open}
-      onClose={busy ? () => undefined : onClose}
+      onClose={busy ? () => undefined : close}
       title="Cancel this ride?"
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             Keep ride
           </Button>
           <Button variant="danger" onClick={submit} loading={busy} disabled={!reason}>

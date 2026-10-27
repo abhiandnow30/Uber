@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CabAssignment, CabRequest, RideStartCredential } from '../src/models/booking.js';
 import { EmailOutbox, Notification } from '../src/models/system.js';
 import { Vehicle } from '../src/models/Vehicle.js';
-import { assign, bookingInput, drainOutbox, driverLogin, employeePin, fakeEmail, makeCoordinator, makeDriver, makeEmployee, makeRetriesDue, scenario } from './helpers.js';
+import { assign, bookingInput, drainOutbox, driverLogin, employeePin, fakeEmail, futureDate, makeCoordinator, makeDriver, makeEmployee, makeRetriesDue, scenario } from './helpers.js';
 
 describe('cab assignment', () => {
   it('assigns an eligible driver + vehicle, creates a PIN, emails the employee and notifies the driver', async () => {
@@ -189,6 +189,22 @@ describe('cab assignment', () => {
     const later = await ride('Manikonda Cab', '03:00');
     const elig2 = await coord.client.post('/api/ops/trips/eligible', { bookingIds: [later] }).expect(200);
     expect(elig2.body.vehicles.find((v: { _id: string }) => v._id === String(drv.vehicle._id)).eligible).toBe(true);
+  });
+
+  it('rides at different times cannot be put in one cab together', async () => {
+    const coord = await makeCoordinator(['HYD']);
+    const drv = await makeDriver({ capacity: 4 });
+    const ids: string[] = [];
+    for (const pickupTime of ['09:00', '11:00']) {
+      const e = await makeEmployee();
+      const res = await e.client!.post('/api/me/bookings', bookingInput({ travelDate: futureDate(2), pickupTime }));
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      ids.push(res.body.booking._id);
+    }
+    const res = await coord.client.post('/api/ops/trips', { bookingIds: ids, driverId: drv.driver._id, vehicleId: drv.vehicle._id });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('NOT_SAME_TIME');
+    expect(await CabAssignment.countDocuments({ booking: { $in: ids } })).toBe(0);
   });
 
   it('a shared cab needs a seat for every rider, and rides already assigned cannot be pooled again', async () => {

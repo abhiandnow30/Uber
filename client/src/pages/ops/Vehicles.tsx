@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, type Column } from '../../components/ui';
 import { errorMessage, patch, post } from '../../lib/api';
 import { fieldErrors, useAction, useListState, usePaged } from '../../lib/hooks';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 import { humanize } from '../../lib/format';
 import { DriverPicker } from './Drivers';
 import { OfficeSelect, useOpsOffices } from './OpsDashboard';
@@ -34,21 +35,23 @@ export function VehicleFormModal({ open, onClose, vehicle, onSaved }: { open: bo
   const { offices } = useOpsOffices();
   const editing = !!vehicle;
   const [f, setF] = useState<VehicleForm>({ registrationNumber: '', capacity: '4', officeLocation: '' });
+  const [initial, setInitial] = useState<VehicleForm>(f);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState('');
   useEffect(() => {
     if (!open) return;
     setErrors({});
     setFormError('');
-    setF(
+    const start: VehicleForm =
       vehicle
         ? {
             registrationNumber: vehicle.registrationNumber,
             capacity: String(vehicle.capacity),
             officeLocation: vehicle.officeLocation,
           }
-        : { registrationNumber: '', capacity: '4', officeLocation: offices.length === 1 ? offices[0].code : '' },
-    );
+        : { registrationNumber: '', capacity: '4', officeLocation: offices.length === 1 ? offices[0].code : '' };
+    setF(start);
+    setInitial(start);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, vehicle]);
 
@@ -58,31 +61,39 @@ export function VehicleFormModal({ open, onClose, vehicle, onSaved }: { open: bo
   );
   const set = (k: keyof VehicleForm) => (v: string) => setF((x) => ({ ...x, [k]: v }));
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const saveForm = async (): Promise<boolean> => {
     setErrors({});
     setFormError('');
     const body: Record<string, unknown> = { capacity: Number(f.capacity), officeLocation: f.officeLocation };
     if (!editing) body.registrationNumber = f.registrationNumber;
     try {
       const r = await save.mutateAsync(body);
+      guard.release();
       onClose();
       onSaved?.(r._id);
+      return true;
     } catch (err) {
       setErrors(fieldErrors(err));
       setFormError(errorMessage(err));
+      return false;
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void saveForm();
+  };
+  const guard = useUnsavedChanges(open && changed(f, initial), saveForm);
+  const close = () => guard(onClose);
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={editing ? `Edit ${vehicle!.registrationNumber}` : 'Add vehicle'}
       size="lg"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={close}>
             Cancel
           </Button>
           <Button type="submit" form="vehicle-form" loading={save.isPending}>

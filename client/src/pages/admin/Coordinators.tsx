@@ -22,6 +22,7 @@ import { errorMessage, post } from '../../lib/api';
 import { fmtDateTime } from '../../lib/format';
 import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
 import { usePolicy } from '../../lib/policy';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 
 export const PHONE_RE = /^\+?[0-9][0-9 ()-]{6,19}$/;
 
@@ -63,11 +64,13 @@ export function ScopeFields({ offices, onOffices, errors }: { offices: string[];
   );
 }
 
+const BLANK_COORDINATOR = { fullName: '', email: '', phone: '' };
+
 function CreateCoordinatorModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ fullName: '', email: '', phone: '' });
+  const [form, setForm] = useState(BLANK_COORDINATOR);
   const [offices, setOffices] = useState<string[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -75,15 +78,14 @@ function CreateCoordinatorModal({ open, onClose }: { open: boolean; onClose: () 
 
   useEffect(() => {
     if (!open) return;
-    setForm({ fullName: '', email: '', phone: '' });
+    setForm(BLANK_COORDINATOR);
     setOffices([]);
     setErrors({});
     setError('');
   }, [open]);
 
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (): Promise<boolean> => {
     const v: Record<string, string> = {};
     if (form.fullName.trim().length < 2) v.fullName = 'Full name is required';
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim())) v.email = 'Enter a valid email address';
@@ -92,35 +94,44 @@ function CreateCoordinatorModal({ open, onClose }: { open: boolean; onClose: () 
     if (!offices.length) v.officeLocations = 'Assign at least one office';
     setErrors(v);
     setError('');
-    if (Object.keys(v).length) return;
+    if (Object.keys(v).length) return false;
     setBusy(true);
     try {
       const c = await post<{ _id: string }>('/admin/coordinators', { ...form, officeLocations: offices });
       toast.success('Coordinator added', `They can now sign in with ${form.email} and their mobile number`);
       qc.invalidateQueries({ queryKey: ['admin-coordinators'] });
       qc.invalidateQueries({ queryKey: ['admin-dashboard'] });
+      guard.release();
       onClose();
       navigate(`/admin/coordinators/${c._id}`);
+      return true;
     } catch (err) {
       const fe = fieldErrors(err);
       const msg = errorMessage(err);
       if (/email/i.test(msg) && !fe.email) fe.email = msg;
       setErrors(fe);
       setError(msg);
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(open && changed({ ...form, offices }, { ...BLANK_COORDINATOR, offices: [] }), save);
+  const close = () => guard(onClose);
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Add coordinator"
       size="lg"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" form="coord-form" loading={busy}>

@@ -519,6 +519,10 @@ export async function assignTrip(actor: Actor, input: z.infer<typeof tripSchema>
       if (notReady.length) {
         throw new AppError(409, 'INVALID_TRANSITION', `${notReady.map((b) => b.reference).join(', ')} ${notReady.length === 1 ? 'is' : 'are'} no longer waiting for a cab. Refresh and try again.`);
       }
+      // One cab, one trip: everyone goes the same way at the same date and time.
+      if (bookings.some((b) => slotOf(b) !== slotOf(bookings[0]))) {
+        throw new AppError(422, 'NOT_SAME_TIME', 'These rides are at different times. Assign rides at the same time to one cab.');
+      }
       let { driverId, vehicleId } = input;
       let pickupTime = input.pickupTime;
       let seats = bookings.reduce((n, b) => n + b.passengers, 0);

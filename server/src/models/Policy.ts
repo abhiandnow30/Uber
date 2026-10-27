@@ -77,8 +77,12 @@ const policySchema = new Schema(
       emailOnTripStarted: { type: Boolean, default: false },
       emailOnCompleted: { type: Boolean, default: true },
       emailOnDelay: { type: Boolean, default: true },
-      // 6 PM email to signed-in employees without a cab for tomorrow.
+      // Daily email to signed-in employees without a cab for tomorrow, at reminders.dailyTime.
       dailyBookingReminder: { type: Boolean, default: true },
+    },
+    reminders: {
+      // When the daily reminder goes out (HH:mm, each office's local time). Chosen by the admin.
+      dailyTime: { type: String, default: '18:00' },
     },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },

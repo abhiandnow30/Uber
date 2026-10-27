@@ -21,6 +21,7 @@ import { useAuth } from '../../lib/auth';
 import { fmtDateTime } from '../../lib/format';
 import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
 import { useSsoConfig } from '../../lib/sso';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 import { PHONE_RE } from './Coordinators';
 
 type AdminRow = {
@@ -37,24 +38,25 @@ type AdminRow = {
 
 type Action = { kind: 'suspend' | 'deactivate' | 'reactivate' | 'resend' | 'delete'; admin: AdminRow };
 
+const BLANK_ADMIN = { fullName: '', email: '', phone: '' };
+
 function AddAdminModal({ open, onClose, microsoft }: { open: boolean; onClose: () => void; microsoft: boolean }) {
   const toast = useToast();
   const qc = useQueryClient();
-  const [form, setForm] = useState({ fullName: '', email: '', phone: '' });
+  const [form, setForm] = useState(BLANK_ADMIN);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setForm({ fullName: '', email: '', phone: '' });
+    setForm(BLANK_ADMIN);
     setErrors({});
     setError('');
   }, [open]);
 
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (): Promise<boolean> => {
     const v: Record<string, string> = {};
     if (form.fullName.trim().length < 2) v.fullName = 'Full name is required';
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim())) v.email = 'Enter a valid email address';
@@ -62,32 +64,40 @@ function AddAdminModal({ open, onClose, microsoft }: { open: boolean; onClose: (
     else if (!PHONE_RE.test(form.phone.trim())) v.phone = 'Enter a valid phone number';
     setErrors(v);
     setError('');
-    if (Object.keys(v).length) return;
+    if (Object.keys(v).length) return false;
     setBusy(true);
     try {
       await post('/admin/admins', form);
       toast.success('Admin added', microsoft ? `${form.email} can now sign in with Microsoft` : `An activation email has been queued for ${form.email}`);
       qc.invalidateQueries({ queryKey: ['admin-admins'] });
       onClose();
+      return true;
     } catch (err) {
       const fe = fieldErrors(err);
       const msg = errorMessage(err);
       if (/email/i.test(msg) && !fe.email) fe.email = msg;
       setErrors(fe);
       setError(msg);
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(open && changed(form, BLANK_ADMIN), save);
+  const close = () => guard(onClose);
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Add admin"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" form="admin-form" loading={busy}>

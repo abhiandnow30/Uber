@@ -5,6 +5,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, useToast, type Column } from '../../components/ui';
 import { errorMessage, get, patch, post, type Paged } from '../../lib/api';
 import { fieldErrors, useAction, useListState, usePaged } from '../../lib/hooks';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 import { ExpiryText, OfficeSelect, toDateInput, useOpsOffices } from './OpsDashboard';
 import type { VehicleRow } from './Vehicles';
 
@@ -104,13 +105,14 @@ export function DriverFormModal({ open, onClose, driver, onSaved }: { open: bool
   const editing = !!driver;
   const blank: DriverForm = { fullName: '', phone: '', licenseNumber: '', licenseExpiry: '', officeLocation: offices.length === 1 ? offices[0].code : '' };
   const [f, setF] = useState<DriverForm>(blank);
+  const [initial, setInitial] = useState<DriverForm>(blank);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState('');
   useEffect(() => {
     if (!open) return;
     setErrors({});
     setFormError('');
-    setF(
+    const start: DriverForm =
       driver
         ? {
             fullName: driver.fullName,
@@ -119,8 +121,9 @@ export function DriverFormModal({ open, onClose, driver, onSaved }: { open: bool
             licenseExpiry: toDateInput(driver.licenseExpiry),
             officeLocation: driver.officeLocation,
           }
-        : blank,
-    );
+        : blank;
+    setF(start);
+    setInitial(start);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, driver]);
 
@@ -131,30 +134,38 @@ export function DriverFormModal({ open, onClose, driver, onSaved }: { open: bool
 
   const set = (k: keyof DriverForm) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const saveForm = async (): Promise<boolean> => {
     setErrors({});
     setFormError('');
     const body: Record<string, unknown> = { ...f };
     try {
       const r = await save.mutateAsync(body);
+      guard.release();
       onClose();
       onSaved?.(r._id);
+      return true;
     } catch (err) {
       setErrors(fieldErrors(err));
       setFormError(errorMessage(err));
+      return false;
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void saveForm();
+  };
+  const guard = useUnsavedChanges(open && changed(f, initial), saveForm);
+  const close = () => guard(onClose);
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={editing ? `Edit driver ${driver!.driverCode}` : 'Add driver'}
       size="lg"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={close}>
             Cancel
           </Button>
           <Button type="submit" form="driver-form" loading={save.isPending}>

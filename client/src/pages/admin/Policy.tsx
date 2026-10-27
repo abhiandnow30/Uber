@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Checkbox, ErrorState, Input, PageHeader, Select, Spinner, useToast } from '../../components/ui';
+import { AlertTriangle, Check, Loader2, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { Alert, Button, Card, Checkbox, ErrorState, Input, PageHeader, Select, Spinner } from '../../components/ui';
 import { errorMessage, get, put } from '../../lib/api';
-import { fmtDateTime } from '../../lib/format';
+import { fmt12h, fmtDateTime } from '../../lib/format';
 import { fieldErrors } from '../../lib/hooks';
 import type { Office, Shift } from '../../lib/policy';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 
 type FullPolicy = {
   _id: string;
@@ -18,6 +19,7 @@ type FullPolicy = {
   pin: { digits?: number; maxAttempts: number; validAfterPickupMinutes: number };
   exceptions: { latePickupThresholdMinutes: number; overdueTripMinutes: number };
   notifications: Record<string, boolean>;
+  reminders?: { dailyTime?: string };
 };
 
 type SectionKey = 'booking' | 'assignment' | 'pin' | 'exceptions';
@@ -69,9 +71,9 @@ const SECTIONS: Array<{ key: SectionKey; title: string; description: string; fie
   },
 ];
 
+const APP_ONLY_EVENTS = ['emailOnSubmitted', 'emailOnApprovalDecision'];
+
 const NOTIFICATION_LABELS: Record<string, string> = {
-  emailOnSubmitted: 'Booking submitted (confirmation to employee)',
-  emailOnApprovalDecision: 'Booking approved / rejected',
   emailOnAssigned: 'Cab assigned (driver & vehicle details)',
   emailOnChanged: 'Assignment changed',
   emailOnCancelled: 'Booking cancelled',
@@ -79,86 +81,137 @@ const NOTIFICATION_LABELS: Record<string, string> = {
   emailOnTripStarted: 'Trip started',
   emailOnCompleted: 'Trip completed',
   emailOnDelay: 'Delay detected',
-  dailyBookingReminder: 'Daily 6 PM reminder to request tomorrow’s cab',
+  dailyBookingReminder: 'Daily reminder to request tomorrow’s cab',
 };
-
-/** Save helper shared by every section; returns field errors keyed relative to the section. */
-function useSave() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  return async (body: Record<string, unknown>, label: string) => {
-    const updated = await put<FullPolicy>('/admin/policy', body);
-    qc.setQueryData(['admin-policy'], updated);
-    qc.invalidateQueries({ queryKey: ['admin-policy'] });
-    qc.invalidateQueries({ queryKey: ['policy'] });
-    toast.success(`${label} saved`, `Policy is now version ${updated.version}`);
-    return updated;
-  };
-}
 
 function stripPrefix(errs: Record<string, string>, prefix: string) {
   return Object.fromEntries(Object.entries(errs).filter(([k]) => k.startsWith(prefix + '.')).map(([k, v]) => [k.slice(prefix.length + 1), v]));
 }
 
-function RuleSection({ def, values }: { def: (typeof SECTIONS)[number]; values: Record<string, unknown> }) {
-  const save = useSave();
-  const [form, setForm] = useState<Record<string, string | boolean>>({});
+type Status = 'idle' | 'saving' | 'saved' | 'invalid' | 'error';
+
+/**
+ * Auto-save for one settings section. `saved` is the section as stored, in the form's own shape.
+ * `set` changes the form without saving (while typing); `commit` saves now (a tick, a dropdown, leaving
+ * a field). Saves run one after another; a section with an invalid field isn't saved until it is fixed.
+ * When the stored policy changes (this or another section saved), fields not being edited follow it.
+ */
+function useAutoSave<T>(saved: T, opts: { prefix: string; validate: (v: T) => Record<string, string>; toBody: (v: T) => Record<string, unknown>; merge?: (v: T, prev: T, next: T) => T }) {
+  const qc = useQueryClient();
+  const [value, setValue] = useState(saved);
+  const valueRef = useRef(saved);
+  const savedRef = useRef(saved);
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<Status>('idle');
+  const [message, setMessage] = useState('');
+  const optsRef = useRef(opts);
+  optsRef.current = opts;
+
+  const update = (v: T) => {
+    valueRef.current = v;
+    setValue(v);
+  };
 
   useEffect(() => {
-    setForm(Object.fromEntries(def.fields.map((f) => [f.key, f.type === 'boolean' ? !!values[f.key] : String(values[f.key] ?? '')])));
-  }, [values, def]);
+    const prev = savedRef.current;
+    savedRef.current = saved;
+    const v = valueRef.current;
+    update(!changed(v, prev) ? saved : optsRef.current.merge ? optsRef.current.merge(v, prev, saved) : v);
+  }, [saved]);
 
-  const submit = async () => {
-    const v: Record<string, string> = {};
-    const body: Record<string, unknown> = {};
-    for (const f of def.fields) {
-      const raw = form[f.key];
-      if (f.type === 'boolean') body[f.key] = !!raw;
-      else if (f.type === 'time') body[f.key] = String(raw ?? '');
-      else {
-        const n = Number(raw);
-        if (raw === '' || !Number.isInteger(n)) v[f.key] = 'Enter a whole number';
-        else if ((f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max)) v[f.key] = `Must be between ${f.min} and ${f.max}`;
-        body[f.key] = n;
-      }
-    }
-    setErrors(v);
-    setError('');
-    if (Object.keys(v).length) return;
-    setBusy(true);
+  const doSave = async (v: T) => {
+    if (!changed(v, savedRef.current)) return true;
+    setStatus('saving');
+    setMessage('');
     try {
-      await save({ [def.key]: body }, def.title);
+      const updated = await put<FullPolicy>('/admin/policy', optsRef.current.toBody(v));
+      savedRef.current = v;
+      qc.setQueryData(['admin-policy'], updated);
+      qc.invalidateQueries({ queryKey: ['policy'] });
+      setStatus(changed(valueRef.current, v) ? 'idle' : 'saved');
+      return true;
     } catch (err) {
-      setErrors(stripPrefix(fieldErrors(err), def.key));
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
+      setErrors(stripPrefix(fieldErrors(err), optsRef.current.prefix));
+      setMessage(errorMessage(err));
+      setStatus('error');
+      return false;
     }
   };
 
-  return (
-    <Card
-      title={def.title}
-      actions={
-        <Button size="sm" onClick={submit} loading={busy}>
-          Save
-        </Button>
+  const commit = useCallback((next?: T): Promise<boolean> => {
+    const v = next ?? valueRef.current;
+    update(v);
+    const errs = optsRef.current.validate(v);
+    setErrors(errs);
+    if (Object.keys(errs).length) {
+      setStatus('invalid');
+      return Promise.resolve(false);
+    }
+    const run = chain.current.then(() => doSave(v));
+    chain.current = run.catch(() => {});
+    return run;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const dirty = changed(value, saved);
+  return { value, set: update, commit, errors, status: dirty && status === 'saved' ? 'idle' : status, message, dirty };
+}
+
+/** Typed fields save when the person leaves them; Enter does the same. */
+const blurOnEnter = (e: KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && e.currentTarget.blur();
+
+function SaveStatus({ status, dirty }: { status: Status; dirty: boolean }) {
+  if (status === 'saving')
+    return (
+      <span className="flex items-center gap-1.5 text-sm text-slate-500" aria-live="polite">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Saving…
+      </span>
+    );
+  if (status === 'invalid' || status === 'error')
+    return (
+      <span className="flex items-center gap-1.5 text-sm font-medium text-amber-700" aria-live="polite">
+        <AlertTriangle className="h-4 w-4" aria-hidden /> Not saved — fix the highlighted field
+      </span>
+    );
+  if (status === 'saved' && !dirty)
+    return (
+      <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-700" aria-live="polite">
+        <Check className="h-4 w-4" aria-hidden /> Saved
+      </span>
+    );
+  return <span className="text-xs text-slate-400">Saves automatically</span>;
+}
+
+type AutoSave = { dirty: boolean; commit: () => Promise<boolean> };
+
+function RuleSection({ def, values, onState }: { def: (typeof SECTIONS)[number]; values: Record<string, unknown>; onState: (s: AutoSave) => void }) {
+  const saved = useMemo(() => Object.fromEntries(def.fields.map((f) => [f.key, f.type === 'boolean' ? !!values[f.key] : String(values[f.key] ?? '')])) as Record<string, string | boolean>, [values, def]);
+  const s = useAutoSave(saved, {
+    prefix: def.key,
+    validate: (form) => {
+      const v: Record<string, string> = {};
+      for (const f of def.fields) {
+        if (f.type !== 'number') continue;
+        const n = Number(form[f.key]);
+        if (form[f.key] === '' || !Number.isInteger(n)) v[f.key] = 'Enter a whole number';
+        else if ((f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max)) v[f.key] = `Must be between ${f.min} and ${f.max}`;
       }
-    >
+      return v;
+    },
+    toBody: (form) => ({ [def.key]: Object.fromEntries(def.fields.map((f) => [f.key, f.type === 'boolean' ? !!form[f.key] : f.type === 'number' ? Number(form[f.key]) : String(form[f.key] ?? '')])) }),
+    // keep what is being typed; take everything else from the stored policy
+    merge: (v, prev, next) => Object.fromEntries(Object.keys(next).map((k) => [k, v[k] === prev[k] ? next[k] : v[k]])),
+  });
+  useEffect(() => onState({ dirty: s.dirty && s.status !== 'saving', commit: () => s.commit() }), [s.dirty, s.status, s.commit, onState]);
+
+  return (
+    <Card title={def.title} actions={<SaveStatus status={s.status} dirty={s.dirty} />}>
       <p className="mb-3 text-sm text-slate-500">{def.description}</p>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {def.fields.map((f) =>
           f.type === 'boolean' ? (
-            <Checkbox
-              key={f.key}
-              className="sm:col-span-2"
-              label={f.label}
-              checked={!!form[f.key]}
-              onChange={(e) => setForm((x) => ({ ...x, [f.key]: e.target.checked }))}
-            />
+            <Checkbox key={f.key} className="sm:col-span-2" label={f.label} checked={!!s.value[f.key]} onChange={(e) => s.commit({ ...s.value, [f.key]: e.target.checked })} />
           ) : (
             <Input
               key={f.key}
@@ -167,98 +220,124 @@ function RuleSection({ def, values }: { def: (typeof SECTIONS)[number]; values: 
               inputMode={f.type === 'number' ? 'numeric' : undefined}
               min={f.min}
               max={f.max}
-              value={String(form[f.key] ?? '')}
-              onChange={(e) => setForm((x) => ({ ...x, [f.key]: e.target.value }))}
-              error={errors[f.key]}
+              value={String(s.value[f.key] ?? '')}
+              onChange={(e) => s.set({ ...s.value, [f.key]: e.target.value })}
+              onBlur={() => s.commit()}
+              onKeyDown={blurOnEnter}
+              error={s.errors[f.key]}
               hint={f.hint ?? (f.min !== undefined ? `${f.min}–${f.max}` : undefined)}
             />
           ),
         )}
       </div>
-      {error && !Object.keys(errors).length && (
+      {s.message && !Object.keys(s.errors).length && (
         <div className="mt-3">
-          <Alert tone="error">{error}</Alert>
+          <Alert tone="error">{s.message}</Alert>
         </div>
       )}
     </Card>
   );
 }
 
-function NotificationsSection({ values }: { values: Record<string, boolean> }) {
-  const save = useSave();
-  const [form, setForm] = useState(values);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  useEffect(() => setForm(values), [values]);
-  const submit = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await save({ notifications: form }, 'Notification preferences');
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+/** When the daily reminder goes out; shown while the reminder is switched on. */
+function ReminderTime({ value, onState }: { value: string; onState: (s: AutoSave) => void }) {
+  const saved = useMemo(() => ({ dailyTime: value }), [value]);
+  const s = useAutoSave(saved, {
+    prefix: 'reminders',
+    validate: (v): Record<string, string> => (/^\d{2}:\d{2}$/.test(v.dailyTime) ? {} : { dailyTime: 'Choose a time' }),
+    toBody: (v) => ({ reminders: { dailyTime: v.dailyTime } }),
+  });
+  useEffect(() => onState({ dirty: s.dirty && s.status !== 'saving', commit: () => s.commit() }), [s.dirty, s.status, s.commit, onState]);
   return (
-    <Card
-      title="Email notification preferences"
-      actions={
-        <Button size="sm" onClick={submit} loading={busy}>
-          Save
-        </Button>
-      }
-    >
+    <div className="flex flex-wrap items-end gap-3 rounded-lg bg-slate-50 p-3 sm:col-span-2">
+      <Input
+        className="w-44"
+        label="Send the reminder at"
+        type="time"
+        value={s.value.dailyTime}
+        onChange={(e) => s.set({ dailyTime: e.target.value })}
+        onBlur={() => s.commit()}
+        onKeyDown={blurOnEnter}
+        error={s.errors.dailyTime}
+      />
+      <p className="pb-2 text-xs text-slate-500">
+        Each office&apos;s local time. Employees who haven&apos;t requested a cab for the next day get it then.
+        {s.value.dailyTime ? ` Now: ${fmt12h(s.value.dailyTime)}.` : ''}
+      </p>
+      <div className="ml-auto pb-2">
+        <SaveStatus status={s.status} dirty={s.dirty} />
+      </div>
+    </div>
+  );
+}
+
+function NotificationsSection({ values, reminderTime, onState, onReminderState }: { values: Record<string, boolean>; reminderTime: string; onState: (s: AutoSave) => void; onReminderState: (s: AutoSave) => void }) {
+  const s = useAutoSave(values, {
+    prefix: 'notifications',
+    validate: () => ({}),
+    toBody: (form) => ({ notifications: form }),
+    merge: (v, prev, next) => Object.fromEntries(Object.keys(next).map((k) => [k, v[k] === prev[k] ? next[k] : v[k]])),
+  });
+  useEffect(() => onState({ dirty: s.dirty && s.status !== 'saving', commit: () => s.commit() }), [s.dirty, s.status, s.commit, onState]);
+  return (
+    <Card title="Email notification preferences" actions={<SaveStatus status={s.status} dirty={s.dirty} />}>
       <p className="mb-3 text-sm text-slate-500">Which booking events send an email. In-app notifications are always delivered.</p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {Object.keys(form).map((k) => (
-          <Checkbox key={k} label={NOTIFICATION_LABELS[k] ?? k} checked={!!form[k]} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.checked }))} />
-        ))}
+        {/* New requests and approval decisions never email the employee, so those switches aren't shown. */}
+        {Object.keys(s.value)
+          .filter((k) => !APP_ONLY_EVENTS.includes(k))
+          .map((k) => (
+            <Checkbox key={k} label={NOTIFICATION_LABELS[k] ?? k} checked={!!s.value[k]} onChange={(e) => s.commit({ ...s.value, [k]: e.target.checked })} />
+          ))}
+        {s.value.dailyBookingReminder && <ReminderTime value={reminderTime} onState={onReminderState} />}
       </div>
-      {error && (
+      {s.message && (
         <div className="mt-3">
-          <Alert tone="error">{error}</Alert>
+          <Alert tone="error">{s.message}</Alert>
         </div>
       )}
     </Card>
   );
 }
 
-function OfficesSection({ values }: { values: Office[] }) {
-  const save = useSave();
-  const [rows, setRows] = useState<Office[]>(values);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  useEffect(() => setRows(values), [values]);
-  const update = (i: number, patch: Partial<Office>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+/**
+ * Lists (offices, shifts): a row's problems show once the person has left one of its fields, so a
+ * new empty row isn't flagged before they've started on it.
+ */
+function useTouchedRows() {
+  const [touched, setTouched] = useState<Set<number>>(new Set());
+  return {
+    touch: (i: number) => setTouched((t) => new Set(t).add(i)),
+    reset: () => setTouched(new Set()),
+    shown: (errors: Record<string, string>) => Object.fromEntries(Object.entries(errors).filter(([k]) => touched.has(Number(k.split('.')[0])))),
+  };
+}
 
-  const submit = async () => {
-    const v: Record<string, string> = {};
-    const codes = rows.map((r) => r.code.trim().toUpperCase());
-    rows.forEach((r, i) => {
-      if (!/^[A-Za-z0-9_-]{2,10}$/.test(r.code.trim())) v[`${i}.code`] = '2-10 letters, digits, - or _';
-      else if (codes.indexOf(codes[i]) !== i) v[`${i}.code`] = 'Duplicate code';
-      if (r.name.trim().length < 2) v[`${i}.name`] = 'Name is required';
-      if (!r.timezone.trim()) v[`${i}.timezone`] = 'Time zone is required';
-    });
-    if (!rows.length) v._ = 'At least one office is required';
-    setErrors(v);
-    setError(v._ ?? '');
-    if (Object.keys(v).length) return;
-    setBusy(true);
-    try {
-      await save(
-        { officeLocations: rows.map((r) => ({ code: r.code.trim().toUpperCase(), name: r.name.trim(), address: r.address?.trim() ?? '', timezone: r.timezone.trim(), active: r.active })) },
-        'Office locations',
-      );
-    } catch (err) {
-      setErrors(stripPrefix(fieldErrors(err), 'officeLocations'));
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
+function OfficesSection({ values, onState }: { values: Office[]; onState: (s: AutoSave) => void }) {
+  const t = useTouchedRows();
+  const s = useAutoSave(values, {
+    prefix: 'officeLocations',
+    validate: (rows) => {
+      const v: Record<string, string> = {};
+      const codes = rows.map((r) => r.code.trim().toUpperCase());
+      rows.forEach((r, i) => {
+        if (!/^[A-Za-z0-9_-]{2,10}$/.test(r.code.trim())) v[`${i}.code`] = '2-10 letters, digits, - or _';
+        else if (codes.indexOf(codes[i]) !== i) v[`${i}.code`] = 'Duplicate code';
+        if (r.name.trim().length < 2) v[`${i}.name`] = 'Name is required';
+        if (!r.timezone.trim()) v[`${i}.timezone`] = 'Time zone is required';
+      });
+      if (!rows.length) v._ = 'At least one office is required';
+      return v;
+    },
+    toBody: (rows) => ({ officeLocations: rows.map((r) => ({ code: r.code.trim().toUpperCase(), name: r.name.trim(), address: r.address?.trim() ?? '', timezone: r.timezone.trim(), active: r.active })) }),
+  });
+  useEffect(() => onState({ dirty: s.dirty && s.status !== 'saving', commit: () => s.commit() }), [s.dirty, s.status, s.commit, onState]);
+  const rows = s.value;
+  const errors = t.shown(s.errors);
+  const edit = (i: number, patch: Partial<Office>) => rows.map((x, j) => (j === i ? { ...x, ...patch } : x));
+  const leave = (i: number) => {
+    t.touch(i);
+    void s.commit();
   };
 
   return (
@@ -266,11 +345,9 @@ function OfficesSection({ values }: { values: Office[] }) {
       title="Office locations"
       actions={
         <>
-          <Button size="sm" variant="secondary" icon={<Plus className="h-4 w-4" />} onClick={() => setRows((r) => [...r, { code: '', name: '', address: '', timezone: 'Asia/Kolkata', active: true }])}>
+          <SaveStatus status={s.status === 'invalid' && !Object.keys(errors).length ? 'idle' : s.status} dirty={s.dirty} />
+          <Button size="sm" variant="secondary" icon={<Plus className="h-4 w-4" />} onClick={() => s.set([...rows, { code: '', name: '', address: '', timezone: 'Asia/Kolkata', active: true }])}>
             Add office
-          </Button>
-          <Button size="sm" onClick={submit} loading={busy}>
-            Save
           </Button>
         </>
       }
@@ -280,74 +357,81 @@ function OfficesSection({ values }: { values: Office[] }) {
         {rows.map((r, i) => (
           <fieldset key={i} className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-2 lg:grid-cols-12">
             <legend className="sr-only">Office {i + 1}</legend>
-            <Input className="lg:col-span-2" label="Code" value={r.code} onChange={(e) => update(i, { code: e.target.value.toUpperCase() })} error={errors[`${i}.code`]} required />
-            <Input className="lg:col-span-3" label="Name" value={r.name} onChange={(e) => update(i, { name: e.target.value })} error={errors[`${i}.name`]} required />
-            <Input className="lg:col-span-3" label="Address" value={r.address ?? ''} onChange={(e) => update(i, { address: e.target.value })} error={errors[`${i}.address`]} />
-            <Input className="lg:col-span-2" label="Time zone (IANA)" value={r.timezone} onChange={(e) => update(i, { timezone: e.target.value })} error={errors[`${i}.timezone`]} required />
+            <Input className="lg:col-span-2" label="Code" value={r.code} onChange={(e) => s.set(edit(i, { code: e.target.value.toUpperCase() }))} onBlur={() => leave(i)} onKeyDown={blurOnEnter} error={errors[`${i}.code`]} required />
+            <Input className="lg:col-span-3" label="Name" value={r.name} onChange={(e) => s.set(edit(i, { name: e.target.value }))} onBlur={() => leave(i)} onKeyDown={blurOnEnter} error={errors[`${i}.name`]} required />
+            <Input className="lg:col-span-3" label="Address" value={r.address ?? ''} onChange={(e) => s.set(edit(i, { address: e.target.value }))} onBlur={() => leave(i)} onKeyDown={blurOnEnter} error={errors[`${i}.address`]} />
+            <Input className="lg:col-span-2" label="Time zone (IANA)" value={r.timezone} onChange={(e) => s.set(edit(i, { timezone: e.target.value }))} onBlur={() => leave(i)} onKeyDown={blurOnEnter} error={errors[`${i}.timezone`]} required />
             <div className="flex items-end justify-between gap-2 lg:col-span-2">
-              <Checkbox label="Active" checked={r.active} onChange={(e) => update(i, { active: e.target.checked })} className="pb-2" />
-              <Button size="sm" variant="ghost" aria-label={`Remove office ${r.code || i + 1}`} icon={<Trash2 className="h-4 w-4" />} onClick={() => setRows((x) => x.filter((_, j) => j !== i))} />
+              <Checkbox
+                label="Active"
+                checked={r.active}
+                onChange={(e) => {
+                  t.touch(i);
+                  void s.commit(edit(i, { active: e.target.checked }));
+                }}
+                className="pb-2"
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Remove office ${r.code || i + 1}`}
+                icon={<Trash2 className="h-4 w-4" />}
+                onClick={() => {
+                  t.reset();
+                  void s.commit(rows.filter((_, j) => j !== i));
+                }}
+              />
             </div>
           </fieldset>
         ))}
       </div>
-      {error && (
+      {(s.errors._ || (s.message && s.status === 'error')) && (
         <div className="mt-3">
-          <Alert tone="error">{error}</Alert>
+          <Alert tone="error">{s.errors._ ?? s.message}</Alert>
         </div>
       )}
     </Card>
   );
 }
 
-function ShiftsSection({ values }: { values: Shift[] }) {
-  const save = useSave();
-  const [rows, setRows] = useState<Shift[]>(values);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  useEffect(() => setRows(values), [values]);
-  const update = (i: number, patch: Partial<Shift>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
-
-  const submit = async () => {
-    const v: Record<string, string> = {};
-    const codes = rows.map((r) => r.code.trim().toUpperCase());
-    rows.forEach((r, i) => {
-      if (!/^[A-Za-z0-9_-]{2,20}$/.test(r.code.trim())) v[`${i}.code`] = '2-20 letters, digits, - or _';
-      else if (codes.indexOf(codes[i]) !== i) v[`${i}.code`] = 'Duplicate code';
-      if (r.name.trim().length < 2) v[`${i}.name`] = 'Name is required';
-      if (!!r.startTime !== !!r.endTime) v[`${i}.${r.startTime ? 'endTime' : 'startTime'}`] = 'Set both start and end';
-      if (r.startTime && !r.defaultPickupTime) v[`${i}.defaultPickupTime`] = 'Set the cab time';
-    });
-    setErrors(v);
-    setError('');
-    if (Object.keys(v).length) return;
-    setBusy(true);
-    try {
-      await save(
-        {
-          shifts: rows.map((r) => ({ code: r.code.trim().toUpperCase(), name: r.name.trim(), startTime: r.startTime ?? '', endTime: r.endTime ?? '', direction: r.direction, defaultPickupTime: r.defaultPickupTime ?? '', active: r.active })),
-        },
-        'Shifts',
-      );
-    } catch (err) {
-      setErrors(stripPrefix(fieldErrors(err), 'shifts'));
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
+function ShiftsSection({ values, onState }: { values: Shift[]; onState: (s: AutoSave) => void }) {
+  const t = useTouchedRows();
+  const s = useAutoSave(values, {
+    prefix: 'shifts',
+    validate: (rows) => {
+      const v: Record<string, string> = {};
+      const codes = rows.map((r) => r.code.trim().toUpperCase());
+      rows.forEach((r, i) => {
+        if (!/^[A-Za-z0-9_-]{2,20}$/.test(r.code.trim())) v[`${i}.code`] = '2-20 letters, digits, - or _';
+        else if (codes.indexOf(codes[i]) !== i) v[`${i}.code`] = 'Duplicate code';
+        if (r.name.trim().length < 2) v[`${i}.name`] = 'Name is required';
+        if (!!r.startTime !== !!r.endTime) v[`${i}.${r.startTime ? 'endTime' : 'startTime'}`] = 'Set both start and end';
+        if (r.startTime && !r.defaultPickupTime) v[`${i}.defaultPickupTime`] = 'Set the cab time';
+      });
+      return v;
+    },
+    toBody: (rows) => ({
+      shifts: rows.map((r) => ({ code: r.code.trim().toUpperCase(), name: r.name.trim(), startTime: r.startTime ?? '', endTime: r.endTime ?? '', direction: r.direction, defaultPickupTime: r.defaultPickupTime ?? '', active: r.active })),
+    }),
+  });
+  useEffect(() => onState({ dirty: s.dirty && s.status !== 'saving', commit: () => s.commit() }), [s.dirty, s.status, s.commit, onState]);
+  const rows = s.value;
+  const errors = t.shown(s.errors);
+  const edit = (i: number, patch: Partial<Shift>) => rows.map((x, j) => (j === i ? { ...x, ...patch } : x));
+  const leave = (i: number) => {
+    t.touch(i);
+    void s.commit();
   };
+  const field = (i: number) => ({ onBlur: () => leave(i), onKeyDown: blurOnEnter });
 
   return (
     <Card
       title="Shifts"
       actions={
         <>
-          <Button size="sm" variant="secondary" icon={<Plus className="h-4 w-4" />} onClick={() => setRows((r) => [...r, { code: '', name: '', startTime: '', endTime: '', direction: 'FROM_OFFICE', defaultPickupTime: '', active: true }])}>
+          <SaveStatus status={s.status === 'invalid' && !Object.keys(errors).length ? 'idle' : s.status} dirty={s.dirty} />
+          <Button size="sm" variant="secondary" icon={<Plus className="h-4 w-4" />} onClick={() => s.set([...rows, { code: '', name: '', startTime: '', endTime: '', direction: 'FROM_OFFICE', defaultPickupTime: '', active: true }])}>
             Add shift
-          </Button>
-          <Button size="sm" onClick={submit} loading={busy}>
-            Save
           </Button>
         </>
       }
@@ -357,11 +441,19 @@ function ShiftsSection({ values }: { values: Shift[] }) {
         {rows.map((r, i) => (
           <fieldset key={i} className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-2 lg:grid-cols-12">
             <legend className="sr-only">Shift {i + 1}</legend>
-            <Input className="lg:col-span-2" label="Code" value={r.code} onChange={(e) => update(i, { code: e.target.value.toUpperCase() })} error={errors[`${i}.code`]} required />
-            <Input className="lg:col-span-3" label="Name" value={r.name} onChange={(e) => update(i, { name: e.target.value })} error={errors[`${i}.name`]} required />
-            <Input className="lg:col-span-2" label="Shift starts" type="time" value={r.startTime ?? ''} onChange={(e) => update(i, { startTime: e.target.value })} error={errors[`${i}.startTime`]} />
-            <Input className="lg:col-span-2" label="Shift ends" type="time" value={r.endTime ?? ''} onChange={(e) => update(i, { endTime: e.target.value })} error={errors[`${i}.endTime`]} />
-            <Select className="lg:col-span-3" label="Cab trip" value={r.direction} onChange={(e) => update(i, { direction: e.target.value })}>
+            <Input className="lg:col-span-2" label="Code" value={r.code} onChange={(e) => s.set(edit(i, { code: e.target.value.toUpperCase() }))} {...field(i)} error={errors[`${i}.code`]} required />
+            <Input className="lg:col-span-3" label="Name" value={r.name} onChange={(e) => s.set(edit(i, { name: e.target.value }))} {...field(i)} error={errors[`${i}.name`]} required />
+            <Input className="lg:col-span-2" label="Shift starts" type="time" value={r.startTime ?? ''} onChange={(e) => s.set(edit(i, { startTime: e.target.value }))} {...field(i)} error={errors[`${i}.startTime`]} />
+            <Input className="lg:col-span-2" label="Shift ends" type="time" value={r.endTime ?? ''} onChange={(e) => s.set(edit(i, { endTime: e.target.value }))} {...field(i)} error={errors[`${i}.endTime`]} />
+            <Select
+              className="lg:col-span-3"
+              label="Cab trip"
+              value={r.direction}
+              onChange={(e) => {
+                t.touch(i);
+                void s.commit(edit(i, { direction: e.target.value }));
+              }}
+            >
               <option value="FROM_OFFICE">Office → Home</option>
               <option value="TO_OFFICE">Home → Office</option>
               <option value="ANY">Either</option>
@@ -371,19 +463,37 @@ function ShiftsSection({ values }: { values: Shift[] }) {
               label="Cab time"
               type="time"
               value={r.defaultPickupTime ?? ''}
-              onChange={(e) => update(i, { defaultPickupTime: e.target.value })}
+              onChange={(e) => s.set(edit(i, { defaultPickupTime: e.target.value }))}
+              {...field(i)}
               error={errors[`${i}.defaultPickupTime`]}
             />
             <div className="flex items-end justify-between gap-2 lg:col-span-2">
-              <Checkbox label="Active" checked={r.active} onChange={(e) => update(i, { active: e.target.checked })} className="pb-2" />
-              <Button size="sm" variant="ghost" aria-label={`Remove shift ${r.code || i + 1}`} icon={<Trash2 className="h-4 w-4" />} onClick={() => setRows((x) => x.filter((_, j) => j !== i))} />
+              <Checkbox
+                label="Active"
+                checked={r.active}
+                onChange={(e) => {
+                  t.touch(i);
+                  void s.commit(edit(i, { active: e.target.checked }));
+                }}
+                className="pb-2"
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Remove shift ${r.code || i + 1}`}
+                icon={<Trash2 className="h-4 w-4" />}
+                onClick={() => {
+                  t.reset();
+                  void s.commit(rows.filter((_, j) => j !== i));
+                }}
+              />
             </div>
           </fieldset>
         ))}
       </div>
-      {error && (
+      {s.message && s.status === 'error' && (
         <div className="mt-3">
-          <Alert tone="error">{error}</Alert>
+          <Alert tone="error">{s.message}</Alert>
         </div>
       )}
     </Card>
@@ -396,6 +506,18 @@ export default function PolicyPage() {
     queryFn: ({ signal }) => get<FullPolicy>('/admin/policy', signal),
   });
 
+  // Every section reports whether it has changes not saved yet (e.g. a field left invalid, or a new
+  // row not finished), so leaving the page can warn and offer to save them.
+  const [sections, setSections] = useState<Record<string, AutoSave>>({});
+  const report = useMemo(() => {
+    const cache: Record<string, (s: AutoSave) => void> = {};
+    return (key: string) =>
+      (cache[key] ??= (s: AutoSave) =>
+        setSections((all) => (all[key]?.dirty === s.dirty && all[key]?.commit === s.commit ? all : { ...all, [key]: s })));
+  }, []);
+  const unsaved = Object.values(sections).filter((s) => s.dirty);
+  useUnsavedChanges(unsaved.length > 0, async () => (await Promise.all(unsaved.map((s) => s.commit()))).every(Boolean));
+
   if (isLoading) return <Spinner />;
   if (error || !data) return <ErrorState error={error} onRetry={refetch} />;
 
@@ -406,19 +528,24 @@ export default function PolicyPage() {
         subtitle={
           <>
             Version <strong>{data.version}</strong>
-            {data.updatedAt ? ` · last updated ${fmtDateTime(data.updatedAt)}` : ''}. Each section saves independently and every change is recorded in the audit log.
+            {data.updatedAt ? ` · last updated ${fmtDateTime(data.updatedAt)}` : ''}. Changes save automatically and are recorded in the audit log.
           </>
         }
       />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {SECTIONS.map((s) => (
-          <RuleSection key={s.key} def={s} values={data[s.key] as unknown as Record<string, unknown>} />
+          <RuleSection key={s.key} def={s} values={data[s.key] as unknown as Record<string, unknown>} onState={report(s.key)} />
         ))}
       </div>
       <div className="mt-4 space-y-4">
-        <NotificationsSection values={data.notifications ?? {}} />
-        <OfficesSection values={data.officeLocations} />
-        <ShiftsSection values={data.shifts} />
+        <NotificationsSection
+          values={data.notifications ?? {}}
+          reminderTime={data.reminders?.dailyTime ?? '18:00'}
+          onState={report('notifications')}
+          onReminderState={report('reminders')}
+        />
+        <OfficesSection values={data.officeLocations} onState={report('offices')} />
+        <ShiftsSection values={data.shifts} onState={report('shifts')} />
       </div>
     </>
   );

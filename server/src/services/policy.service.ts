@@ -131,6 +131,7 @@ export const policyUpdateSchema = z
       .partial()
       .optional(),
     notifications: z.record(z.string(), z.boolean()).optional(),
+    reminders: z.object({ dailyTime: hhmm }).partial().optional(),
   })
   .strict();
 
@@ -155,7 +156,7 @@ export async function updatePolicy(actor: Actor, input: z.infer<typeof policyUpd
   const set: Record<string, unknown> = { updatedBy: actor.id };
   if (input.officeLocations) set.officeLocations = input.officeLocations;
   if (input.shifts) set.shifts = input.shifts;
-  for (const section of ['booking', 'assignment', 'pin', 'exceptions', 'notifications'] as const) {
+  for (const section of ['booking', 'assignment', 'pin', 'exceptions', 'notifications', 'reminders'] as const) {
     const values = input[section];
     if (!values) continue;
     for (const [k, v] of Object.entries(values)) {

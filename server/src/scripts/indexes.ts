@@ -55,6 +55,9 @@ export async function syncIndexes() {
   // Preferences added later default to on in existing policies (so admins can also switch them off).
   const added = await policies.updateOne({ key: 'global', 'notifications.dailyBookingReminder': { $exists: false } }, { $set: { 'notifications.dailyBookingReminder': true } });
   if (added.modifiedCount) invalidatePolicyCache();
+  // The daily reminder used to be fixed at 6 PM; it now has a time the admin can change.
+  const timed = await policies.updateOne({ key: 'global', 'reminders.dailyTime': { $exists: false } }, { $set: { 'reminders.dailyTime': '18:00' } });
+  if (timed.modifiedCount) invalidatePolicyCache();
 
   // Coordinators are no longer limited by shift.
   await mongoose.connection.db!.collection('coordinators').updateMany({ shifts: { $exists: true } }, { $unset: { shifts: '' } });

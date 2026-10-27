@@ -5,13 +5,13 @@ import { EmailOutbox } from '../src/models/system.js';
 import { renderEmail } from '../src/services/email/templates.js';
 import { sendDailyBookingReminders } from '../src/services/monitor.service.js';
 import { invalidatePolicyCache } from '../src/services/policy.service.js';
-import { bookingInput, futureDate, makeEmployee } from './helpers.js';
+import { bookingInput, futureDate, makeAdmin, makeEmployee } from './helpers.js';
 
 /** A moment `days` from today at the given Hyderabad time. */
 const at = (days: number, hhmm: string) => DateTime.fromISO(`${futureDate(days)}T${hhmm}`, { zone: 'Asia/Kolkata' }).toJSDate();
 const reminders = (to: string) => EmailOutbox.find({ template: 'DAILY_BOOKING_REMINDER', to }).lean();
 
-describe('daily 6 PM booking reminder', () => {
+describe('daily booking reminder (6 PM unless the admin picks another time)', () => {
   it('emails signed-in employees without a cab for tomorrow, once per day', async () => {
     const free = await makeEmployee();
     const booked = await makeEmployee();
@@ -41,5 +41,22 @@ describe('daily 6 PM booking reminder', () => {
     invalidatePolicyCache();
     expect(await sendDailyBookingReminders(at(4, '18:05'))).toBe(0);
     expect(await reminders(emp.employee.email)).toHaveLength(0);
+  });
+
+  it('goes out at the time the admin chose, including just before midnight', async () => {
+    const admin = (await makeAdmin()).client;
+    const emp = await makeEmployee();
+    expect((await admin.put('/api/admin/policy', { reminders: { dailyTime: '25:00' } })).status).toBe(422);
+    await admin.put('/api/admin/policy', { reminders: { dailyTime: '20:30' } }).expect(200);
+
+    expect(await sendDailyBookingReminders(at(5, '18:05'))).toBe(0); // the old 6 PM time no longer counts
+    expect(await sendDailyBookingReminders(at(5, '20:31'))).toBe(1);
+    expect(await reminders(emp.employee.email)).toHaveLength(1);
+
+    // 11:45 PM: a run just after midnight still belongs to the evening before (one email, for the right day)
+    await admin.put('/api/admin/policy', { reminders: { dailyTime: '23:45' } }).expect(200);
+    expect(await sendDailyBookingReminders(at(7, '00:10'))).toBe(1);
+    const latest = (await reminders(emp.employee.email)).at(-1)!;
+    expect(latest.params).toMatchObject({ shiftDate: DateTime.fromISO(futureDate(7)).toFormat('ccc, d LLL yyyy') });
   });
 });

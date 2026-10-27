@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Alert, Button, Modal, Select, Textarea } from '../../components/ui';
 import { errorMessage } from '../../lib/api';
+import { useUnsavedChanges } from '../../lib/unsaved';
 
 /** Minutes past the pickup time after which an assigned cab that hasn't arrived counts as late (as on the server). */
 export const CAB_LATE_MINUTES = 15;
@@ -28,6 +29,10 @@ export function CancelRideDialog({ open, late, summary, onClose, onConfirm }: { 
     }
   }, [open, late]);
 
+  // Saving here would mean cancelling the ride, so a typed reason can only be kept or discarded.
+  const guard = useUnsavedChanges(open && !!note.trim());
+  const close = () => guard(onClose);
+
   const submit = async () => {
     const reason = late ? (choice === 'Other' ? note.trim() : `${choice}${note.trim() ? ` — ${note.trim()}` : ''}`) : note.trim();
     if (reason.length < 3) return setError(late && choice === 'Other' ? 'Say why you are cancelling' : 'Please give a reason (at least 3 characters)');
@@ -46,12 +51,12 @@ export function CancelRideDialog({ open, late, summary, onClose, onConfirm }: { 
   return (
     <Modal
       open={open}
-      onClose={busy ? () => undefined : onClose}
+      onClose={busy ? () => undefined : close}
       title={late ? 'Your cab is late — cancel it?' : 'Cancel this ride?'}
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             Keep ride
           </Button>
           <Button variant="danger" onClick={submit} loading={busy}>

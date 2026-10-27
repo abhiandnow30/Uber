@@ -24,6 +24,7 @@ import {
 } from '../../components/ui';
 import { del, errorMessage, get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { useUnsavedChanges } from '../../lib/unsaved';
 import { fieldErrors } from '../../lib/hooks';
 import { fmt12h, fmtDateTime, fmtRelative, fmtTravelDate, humanize } from '../../lib/format';
 import { DriverFormModal, EMPLOYMENT, type DriverRow } from './Drivers';
@@ -65,11 +66,10 @@ function EmploymentModal({ open, onClose, driver, onDone }: { open: boolean; onC
       setError('');
     }
   }, [open, driver.employmentStatus]);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (): Promise<boolean> => {
     if (reason.trim().length < 3) {
       setErrors({ reason: 'Please enter at least 3 characters' });
-      return;
+      return false;
     }
     setBusy(true);
     setError('');
@@ -77,22 +77,30 @@ function EmploymentModal({ open, onClose, driver, onDone }: { open: boolean; onC
       await post(`/ops/drivers/${driver._id}/employment`, { employmentStatus: status, reason: reason.trim() });
       onDone();
       onClose();
+      return true;
     } catch (err) {
       setErrors(fieldErrors(err));
       setError(errorMessage(err));
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(open && (status !== driver.employmentStatus || reason.trim().length > 0), save);
+  const close = () => guard(onClose);
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Change employment status"
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={close}>
             Cancel
           </Button>
           <Button type="submit" form="employment-form" loading={busy} disabled={status === driver.employmentStatus}>
@@ -135,36 +143,43 @@ function UnavailableModal({ open, onClose, driverId, onDone }: { open: boolean; 
       setError('');
     }
   }, [open]);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (): Promise<boolean> => {
     const errs: Record<string, string> = {};
     if (!from) errs.from = 'Required';
     if (!to) errs.to = 'Required';
     if (from && to && new Date(to) <= new Date(from)) errs.to = '"To" must be after "from"';
     if (reason.trim().length < 3) errs.reason = 'Please enter at least 3 characters';
     setErrors(errs);
-    if (Object.keys(errs).length) return;
+    if (Object.keys(errs).length) return false;
     setBusy(true);
     setError('');
     try {
       const r = await post<{ affectedAssignments: number }>(`/ops/drivers/${driverId}/unavailability`, { from: new Date(from).toISOString(), to: new Date(to).toISOString(), reason: reason.trim() });
       onDone(r.affectedAssignments ?? 0);
       onClose();
+      return true;
     } catch (err) {
       setErrors(fieldErrors(err));
       setError(errorMessage(err));
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(open && !!(from || to || reason.trim()), save);
+  const close = () => guard(onClose);
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Flag driver unavailable"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={close}>
             Cancel
           </Button>
           <Button type="submit" form="unavail-form" loading={busy}>

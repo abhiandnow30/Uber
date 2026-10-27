@@ -24,6 +24,7 @@ import { errorMessage, get, patch, post } from '../../lib/api';
 import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
 import { usePolicy } from '../../lib/policy';
 import { useSsoConfig } from '../../lib/sso';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 
 export type EmployeeRow = {
   _id: string;
@@ -52,6 +53,7 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
   const qc = useQueryClient();
   const editing = !!employee;
   const [form, setForm] = useState<FormState>(EMPTY);
+  const [initial, setInitial] = useState<FormState>(EMPTY);
   const [sendInvitation, setSendInvitation] = useState(true);
   const msOnly = !!useSsoConfig().data?.employeesMicrosoftOnly;
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -64,7 +66,7 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
     setErrors({});
     setError('');
     setSendInvitation(true);
-    setForm(
+    const start: FormState =
       employee
         ? {
             employeeId: employee.employeeId,
@@ -75,8 +77,9 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
             route: employee.route ?? '',
             homeAddress: employee.homeAddress ?? '',
           }
-        : { ...EMPTY, officeLocation: policy.data?.officeLocations.find((o) => o.active)?.code ?? '' },
-    );
+        : { ...EMPTY, officeLocation: policy.data?.officeLocations.find((o) => o.active)?.code ?? '' };
+    setForm(start);
+    setInitial(start);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, employee]);
 
@@ -91,25 +94,24 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
     return e;
   };
 
-  const submit = async (ev: FormEvent) => {
-    ev.preventDefault();
+  const save = async (): Promise<boolean> => {
     const v = validate();
     setErrors(v);
     setError('');
-    if (Object.keys(v).length) return;
+    if (Object.keys(v).length) return false;
     setBusy(true);
     try {
       let id: string;
       if (editing) {
         const { employeeId: _ignored, ...rest } = form;
-        const changed = Object.fromEntries(
+        const diff = Object.fromEntries(
           Object.entries(rest).filter(([k, val]) => val.trim() !== String((employee as Record<string, unknown>)[k] ?? '')),
         );
-        if (!Object.keys(changed).length) {
+        if (!Object.keys(diff).length) {
           onClose();
-          return;
+          return true;
         }
-        await patch(`/admin/employees/${employee!._id}`, changed);
+        await patch(`/admin/employees/${employee!._id}`, diff);
         id = employee!._id;
         toast.success('Employee updated');
       } else {
@@ -123,8 +125,10 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
       qc.invalidateQueries({ queryKey: ['admin-employees'] });
       qc.invalidateQueries({ queryKey: ['admin-employee'] });
       qc.invalidateQueries({ queryKey: ['admin-dashboard'] });
+      guard.release();
       onClose();
       onSaved?.(id);
+      return true;
     } catch (err) {
       const fe = fieldErrors(err);
       setErrors(fe);
@@ -133,21 +137,28 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
       if (/employee id/i.test(msg) && !fe.employeeId) setErrors((x) => ({ ...x, employeeId: msg }));
       else if (/email/i.test(msg) && !fe.email) setErrors((x) => ({ ...x, email: msg }));
       setError(msg);
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(open && changed(form, initial), save);
+  const close = () => guard(onClose);
 
   const offices = policy.data?.officeLocations ?? [];
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={editing ? `Edit ${employee!.fullName}` : 'Add employee'}
       size="lg"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" form="employee-form" loading={busy}>
@@ -258,21 +269,24 @@ function RouteCell({ employee, routes }: { employee: EmployeeRow; routes: string
   const [busy, setBusy] = useState(false);
   useEffect(() => setValue(employee.route ?? ''), [employee.route]);
 
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
     const route = value.trim();
-    if (route === (employee.route ?? '')) return;
+    if (route === (employee.route ?? '')) return true;
     setBusy(true);
     try {
       await patch(`/admin/employees/${employee._id}`, { route });
       toast.success(route ? `${employee.fullName} → ${route}` : `Route cleared for ${employee.fullName}`);
       qc.invalidateQueries({ queryKey: ['admin-employees'] });
+      return true;
     } catch (err) {
       toast.error('Could not save the route', errorMessage(err));
       setValue(employee.route ?? '');
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  useUnsavedChanges(!busy && value.trim() !== (employee.route ?? ''), save);
 
   return (
     <div onClick={(ev) => ev.stopPropagation()}>

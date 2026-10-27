@@ -337,15 +337,7 @@ async function insertBookingLegs(args: {
           { session: tx.session },
         );
         await TripStatusHistory.create([{ booking: b._id, to: status, event: 'REQUESTED', actor: actor.id, actorRole: actor.role }], { session: tx.session });
-        await enqueueEmail(tx.session, {
-          idempotencyKey: `booking-submitted:${b._id}`,
-          template: 'BOOKING_SUBMITTED',
-          to: employee.email,
-          toUserId: actor.id,
-          params: { ...bookingEmailParams(b, employee.fullName), approvalRequired },
-          relatedBookingId: String(b._id),
-          preference: 'emailOnSubmitted',
-        });
+        // No email to the employee for a new request: they see it in the app right away.
         await notifyCoordinators(tx, office.code, {
           type: 'BOOKING_CREATED',
           title: approvalRequired ? 'Cab request awaiting approval' : 'New cab request',
@@ -792,18 +784,7 @@ export async function approveBooking(actor: Actor, id: string) {
   await assertBookingInScope(actor, booking);
   return withTransaction(async (tx) => {
     const updated = await transitionBooking(tx, booking._id, ['PENDING_APPROVAL'], 'APPROVED', { actor, event: 'APPROVED', set: { approvedBy: actor.id, approvedAt: new Date() } });
-    const emp = await Employee.findById(updated.employee).session(tx.session).lean();
-    if (emp) {
-      await enqueueEmail(tx.session, {
-        idempotencyKey: `booking-approved:${updated._id}`,
-        template: 'BOOKING_APPROVED',
-        to: emp.email,
-        toUserId: String(updated.employeeUser),
-        params: bookingEmailParams(updated, emp.fullName),
-        relatedBookingId: String(updated._id),
-        preference: 'emailOnApprovalDecision',
-      });
-    }
+    // Approval and rejection are told in the app only, not by email.
     await notifyInApp(tx, { userId: String(updated.employeeUser), type: 'BOOKING_APPROVED', title: 'Cab request approved', body: `${updated.reference} was approved`, data: { bookingId: String(updated._id) } });
     await audit(actor, 'BOOKING_APPROVED', 'CabRequest', updated._id, `Booking ${updated.reference} approved`, undefined, tx.session);
     return updated;
@@ -823,18 +804,6 @@ export async function rejectBooking(actor: Actor, id: string, reason: string) {
       set: { rejectedBy: actor.id, rejectionReason: reason },
       unset: ['openSlotKey', 'shiftDayKey'],
     });
-    const emp = await Employee.findById(updated.employee).session(tx.session).lean();
-    if (emp) {
-      await enqueueEmail(tx.session, {
-        idempotencyKey: `booking-rejected:${updated._id}`,
-        template: 'BOOKING_REJECTED',
-        to: emp.email,
-        toUserId: String(updated.employeeUser),
-        params: { ...bookingEmailParams(updated, emp.fullName), reason },
-        relatedBookingId: String(updated._id),
-        preference: 'emailOnApprovalDecision',
-      });
-    }
     await notifyInApp(tx, { userId: String(updated.employeeUser), type: 'BOOKING_REJECTED', title: 'Cab request rejected', body: `${updated.reference}: ${reason}`, data: { bookingId: String(updated._id) } });
     await audit(actor, 'BOOKING_REJECTED', 'CabRequest', updated._id, `Booking ${updated.reference} rejected`, { reason }, tx.session);
     return updated;

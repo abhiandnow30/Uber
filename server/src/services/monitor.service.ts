@@ -146,26 +146,31 @@ export async function refreshAvailabilities() {
   for (const d of drivers) await refreshDriverAvailability(d._id);
 }
 
-// Daily reminder window in each office's local time: sent from 6 PM, or later the same
-// evening if the server was down at 6, but never in the middle of the night.
-const REMINDER_FROM = '18:00';
-const REMINDER_UNTIL = '22:00';
-const reminderDone = new Map<string, string>(); // office -> local date already handled
+// The daily reminder goes out at the time the admin chose (each office's local time), or up to
+// a few hours later if the server was down at that time — never long after.
+const DEFAULT_REMINDER_TIME = '18:00';
+const REMINDER_CATCH_UP_MINUTES = 4 * 60;
+const reminderDone = new Map<string, string>(); // office -> reminder day already handled
 
 /**
- * At 6 PM office time, emails every signed-in (ACTIVE) employee who has no open cab request
- * for tomorrow, reminding them to request one. One email per employee per day (idempotency key).
+ * At the admin's reminder time, emails every signed-in (ACTIVE) employee who has no open cab
+ * request for the next day, reminding them to request one. One email per employee per day.
  */
 export async function sendDailyBookingReminders(now: Date) {
   const policy = await getPolicy();
   if ((policy.notifications as Record<string, boolean> | undefined)?.dailyBookingReminder === false) return 0;
+  const sendAt = (policy as { reminders?: { dailyTime?: string } }).reminders?.dailyTime || DEFAULT_REMINDER_TIME;
+  const [h, m] = sendAt.split(':').map(Number);
   let queued = 0;
   for (const office of policy.officeLocations.filter((o) => o.active)) {
     const local = DateTime.fromJSDate(now).setZone(office.timezone);
-    const hhmm = local.toFormat('HH:mm');
-    const today = local.toFormat('yyyy-MM-dd');
-    if (hhmm < REMINDER_FROM || hhmm >= REMINDER_UNTIL || reminderDone.get(office.code) === today) continue;
-    const tomorrow = local.plus({ days: 1 }).toFormat('yyyy-MM-dd');
+    const since = (local.hour * 60 + local.minute - (h * 60 + m) + 1440) % 1440;
+    if (since >= REMINDER_CATCH_UP_MINUTES) continue;
+    // The reminder's day: the one its time fell on (yesterday, for a time just before midnight).
+    const day = local.minus({ minutes: since });
+    const today = day.toFormat('yyyy-MM-dd');
+    if (reminderDone.get(office.code) === today) continue;
+    const tomorrow = day.plus({ days: 1 }).toFormat('yyyy-MM-dd');
 
     const signedIn = await User.find({ role: 'EMPLOYEE', status: 'ACTIVE' }, { _id: 1 }).lean();
     const employees = await Employee.find({ officeLocation: office.code, deletedAt: null, user: { $in: signedIn.map((u) => u._id) } }, { fullName: 1, email: 1, user: 1 }).lean();

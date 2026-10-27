@@ -25,6 +25,7 @@ import {
   type Column,
 } from '../../components/ui';
 import { ApiError, errorMessage, get, patch, post, qs } from '../../lib/api';
+import { useUnsavedChanges } from '../../lib/unsaved';
 import { usePaged } from '../../lib/hooks';
 import { addDaysISO, currentWorkDay, fmt12h, fmtTravelDate, humanize, uuid } from '../../lib/format';
 import { addMinutesHHmm } from '../../lib/policy';
@@ -499,6 +500,8 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
   const [open, setOpen] = useState(change);
   const [reason, setReason] = useState('');
   const current = change ? rides[0] : undefined;
+  // A typed reason for changing the cab isn't thrown away without asking.
+  const guard = useUnsavedChanges(change && !!reason.trim());
   const [vehicleId, setVehicleId] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -509,6 +512,9 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
   // reach-office time — earlier than cab hours if the ride is long. Suggested: an hour before.
   const ins = rides.filter((r) => r.direction === 'IN');
   const mixed = ins.length > 0 && ins.length !== rides.length;
+  // One cab, one trip: every ticked ride must go the same way at the same date and time.
+  const differentTimes = !mixed && new Set(rides.map((r) => `${r.travelDate} ${r.direction === 'IN' ? (r.reportBy ?? r.pickupTime) : r.pickupTime}`)).size > 1;
+  const blocked = !change && (mixed || differentTimes);
   const firstReport = [...ins].sort((a, b) => a.scheduledPickupAt.localeCompare(b.scheduledPickupAt))[0];
   const reachBy = firstReport ? (firstReport.reportBy ?? firstReport.pickupTime) : '';
   const [pickupTime, setPickupTime] = useState('');
@@ -640,10 +646,10 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="ghost" onClick={onClear} disabled={busy}>
+          <Button variant="ghost" onClick={() => guard(onClear)} disabled={busy}>
             {current ? 'Close' : 'Clear'}
           </Button>
-          {!current && (
+          {!current && !blocked && (
             <Button variant={open ? 'secondary' : 'primary'} icon={<Car className="h-4 w-4" />} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
               {open ? 'Hide cabs' : 'Assign to one cab'}
             </Button>
@@ -651,7 +657,21 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
         </div>
       </div>
 
-      {open && (
+      {blocked && (
+        <div className="border-t border-slate-100 p-3 sm:p-4">
+          {mixed ? (
+            <Alert tone="warn" title="IN and OUT rides need separate cabs">
+              Tick only rides to the office (IN) or only rides home (OUT), then assign.
+            </Alert>
+          ) : (
+            <Alert tone="warn" title="These rides are at different times">
+              One cab takes one trip. Tick only rides at the same time, then assign.
+            </Alert>
+          )}
+        </div>
+      )}
+
+      {open && !blocked && (
         <div className="max-h-[55vh] space-y-3 overflow-y-auto border-t border-slate-100 p-3 sm:p-4">
           {eligible.isLoading ? (
             <Spinner label="Finding cabs free for every ride…" />
@@ -802,12 +822,7 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
                 </div>
               )}
 
-              {mixed ? (
-                <Alert tone="warn" title="IN and OUT rides need separate cabs">
-                  Tick only rides to the office (IN) or only rides home (OUT), then assign.
-                </Alert>
-              ) : (
-                chosen && (
+              {chosen && (
                   <div className="flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
                     {current && (
                       <div className="min-w-56 flex-1">
@@ -834,7 +849,6 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
                       {current ? `Move to ${chosen.v.registrationNumber}` : `${join ? 'Add' : 'Assign'} ${rides.length} ${rides.length === 1 ? 'ride' : 'rides'} to ${chosen.v.registrationNumber}`}
                     </Button>
                   </div>
-                )
               )}
               {error && <Alert tone="error">{error}</Alert>}
             </>
@@ -855,9 +869,12 @@ function RenameTripModal({ trip, onClose }: { trip: { tripId: string; name: stri
     setName(trip?.name ?? '');
     setError('');
   }, [trip]);
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!trip) return;
+  const save = async (): Promise<boolean> => {
+    if (!trip) return true;
+    if (name.trim().length < 2) {
+      setError('Give the cab a name (at least 2 characters)');
+      return false;
+    }
     setBusy(true);
     setError('');
     try {
@@ -865,21 +882,29 @@ function RenameTripModal({ trip, onClose }: { trip: { tripId: string; name: stri
       toast.success('Cab renamed', name.trim());
       qc.invalidateQueries({ queryKey: ['ops'] });
       onClose();
+      return true;
     } catch (err) {
       setError(errorMessage(err));
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(!!trip && name.trim() !== trip.name, save);
+  const close = () => guard(onClose);
   return (
     <Modal
       open={!!trip}
-      onClose={onClose}
+      onClose={close}
       title="Rename shared cab"
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" form="rename-trip" loading={busy} disabled={name.trim().length < 2 || name.trim() === trip?.name}>
@@ -888,7 +913,7 @@ function RenameTripModal({ trip, onClose }: { trip: { tripId: string; name: stri
         </>
       }
     >
-      <form id="rename-trip" onSubmit={save} className="space-y-3">
+      <form id="rename-trip" onSubmit={submit} className="space-y-3">
         <Input label="Cab name" required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} hint='e.g. "Kondapur & Madhapur Cab"' />
         {error && <Alert tone="error">{error}</Alert>}
       </form>

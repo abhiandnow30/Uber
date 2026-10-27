@@ -20,7 +20,6 @@ import { useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { get } from '../lib/api';
 import { useAuth, type Role } from '../lib/auth';
-import { useRealtime } from '../lib/realtime';
 import { cn } from './ui';
 
 /** `match`: extra path prefixes that keep this item highlighted (pages grouped under it). */
@@ -116,7 +115,6 @@ export function NotificationBell() {
 
 export function AppLayout() {
   const { me, logout } = useAuth();
-  const { connected } = useRealtime();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
@@ -167,7 +165,7 @@ export function AppLayout() {
           <div className="sticky top-0 flex h-screen flex-col">
             <Brand />
             <div className="flex-1 overflow-y-auto">{nav}</div>
-            <UserFooter name={me.user.name} role={ROLE_LABEL[role]} connected={connected} />
+            <UserFooter name={me.user.name} role={ROLE_LABEL[role]} />
           </div>
         </aside>
       )}
@@ -179,17 +177,12 @@ export function AppLayout() {
               <Menu className="h-5 w-5" />
             </button>
             <span className="font-semibold">{isDriver ? 'Driver' : 'Cab Booking'}</span>
-            <span className={cn('h-2 w-2 rounded-full', connected ? 'bg-emerald-500' : 'bg-slate-300')} title={connected ? 'Live updates on' : 'Reconnecting…'} />
           </div>
           {/* Drivers have the bell on their own home card, so not a second one here. */}
           {!isDriver && <NotificationBell />}
         </header>
         {!isDriver && (
           <div className="sticky top-0 z-20 hidden h-14 items-center justify-end gap-2 border-b border-slate-200 bg-white/95 px-6 backdrop-blur-sm lg:flex">
-            <span className={cn('flex items-center gap-1.5 text-xs', connected ? 'text-emerald-600' : 'text-slate-400')}>
-              <span className={cn('h-2 w-2 rounded-full', connected ? 'bg-emerald-500' : 'bg-slate-300')} />
-              {connected ? 'Live' : 'Reconnecting…'}
-            </span>
             <NotificationBell />
           </div>
         )}
@@ -211,7 +204,7 @@ export function AppLayout() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto">{nav}</div>
-            <UserFooter name={me.user.name} role={ROLE_LABEL[role]} connected={connected} />
+            <UserFooter name={me.user.name} role={ROLE_LABEL[role]} />
           </div>
         </div>
       )}
@@ -228,12 +221,12 @@ function Brand() {
   );
 }
 
-function UserFooter({ name, role, connected }: { name: string; role: string; connected: boolean }) {
+function UserFooter({ name, role }: { name: string; role: string }) {
   return (
     <div className="border-t border-slate-200 p-4 text-sm">
       <p className="truncate font-medium text-slate-900">{name}</p>
       <p className="text-xs text-slate-500">
-        {role} · {connected ? 'live' : 'offline'}
+        {role}
       </p>
     </div>
   );

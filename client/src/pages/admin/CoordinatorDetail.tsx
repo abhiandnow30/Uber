@@ -21,6 +21,7 @@ import {
 import { errorMessage, get, patch, post } from '../../lib/api';
 import { fmtDateTime, humanize } from '../../lib/format';
 import { fieldErrors, useAction } from '../../lib/hooks';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 import { DeleteCoordinatorDialog, PHONE_RE, ScopeFields, type CoordinatorRow } from './Coordinators';
 
 type AuditEntry = { _id: string; action: string; entityType: string; entityId?: string; summary?: string; createdAt: string };
@@ -65,8 +66,7 @@ function EditModal({ open, onClose, coord }: { open: boolean; onClose: () => voi
     setError('');
   }, [open, coord]);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const saveForm = async (): Promise<boolean> => {
     const v: Record<string, string> = {};
     if (form.fullName.trim().length < 2) v.fullName = 'Full name is required';
     if (!form.phone.trim()) v.phone = 'Phone number is required';
@@ -74,25 +74,33 @@ function EditModal({ open, onClose, coord }: { open: boolean; onClose: () => voi
     if (!offices.length) v.officeLocations = 'Assign at least one office';
     setErrors(v);
     setError('');
-    if (Object.keys(v).length) return;
+    if (Object.keys(v).length) return false;
     try {
       await save.mutateAsync({ fullName: form.fullName, phone: form.phone, officeLocations: offices });
       onClose();
+      return true;
     } catch (err) {
       setErrors(fieldErrors(err));
       setError(errorMessage(err));
+      return false;
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void saveForm();
+  };
+  const guard = useUnsavedChanges(open && changed({ ...form, offices }, { fullName: coord.fullName, phone: coord.phone ?? '', offices: coord.officeLocations }), saveForm);
+  const close = () => guard(onClose);
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={`Edit ${coord.fullName}`}
       size="lg"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={save.isPending}>
+          <Button variant="secondary" onClick={close} disabled={save.isPending}>
             Cancel
           </Button>
           <Button type="submit" form="coord-edit" loading={save.isPending}>

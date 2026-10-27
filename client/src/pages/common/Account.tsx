@@ -7,6 +7,7 @@ import { fieldErrors } from '../../lib/hooks';
 import { fmtDateTime, humanize } from '../../lib/format';
 import { fmt12h, usePolicy } from '../../lib/policy';
 import { useSsoConfig } from '../../lib/sso';
+import { useUnsavedChanges } from '../../lib/unsaved';
 import { PasswordFields, passwordOk } from '../public/Activate';
 
 export default function Account() {
@@ -17,11 +18,12 @@ export default function Account() {
   const [confirm, setConfirm] = useState('');
   const [msg, setMsg] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  if (!me) return null;
-  const profile = (me.profile ?? {}) as Record<string, string>;
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (): Promise<boolean> => {
+    if (!current || !passwordOk(password, confirm)) {
+      setMsg({ tone: 'error', text: 'Fill in your current password and a valid new password first.' });
+      return false;
+    }
     setBusy(true);
     setMsg(null);
     try {
@@ -30,12 +32,22 @@ export default function Account() {
       setCurrent('');
       setPassword('');
       setConfirm('');
+      return true;
     } catch (err) {
       setMsg({ tone: 'error', text: errorMessage(err) });
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  useUnsavedChanges(!!(current || password || confirm), save);
+
+  if (!me) return null;
+  const profile = (me.profile ?? {}) as Record<string, string>;
 
   return (
     <>
@@ -95,21 +107,31 @@ function CabDetailsCard() {
   const addressChanged = address.trim() !== savedAddress;
   const addressOk = address.trim().length >= 5 || (!addressChanged && !savedAddress);
 
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (): Promise<boolean> => {
+    if (!addressOk) {
+      setErrors({ homeAddress: 'Enter your full present address' });
+      return false;
+    }
     setBusy(true);
     setErrors({});
     try {
       await patch('/me/profile', { ...(shiftChanged ? { defaultShift: shift } : {}), ...(addressChanged ? { homeAddress: address.trim() } : {}) });
       await refresh();
       toast.success('Cab details saved', 'Your shift is selected and your address is used when you request a cab.');
+      return true;
     } catch (err) {
       const f = fieldErrors(err);
       setErrors(Object.keys(f).length ? f : { form: errorMessage(err) });
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  useUnsavedChanges(shiftChanged || addressChanged, save);
 
   return (
     <Card
@@ -119,7 +141,7 @@ function CabDetailsCard() {
         </span>
       }
     >
-      <form onSubmit={save} className="space-y-4">
+      <form onSubmit={submit} className="space-y-4">
         {(!savedShift || !savedAddress) && <Alert tone="info">Save your shift and present address so cab requests take just a tap.</Alert>}
         <Select label="My shift" value={shift} onChange={(e) => setShift(e.target.value)} error={errors.defaultShift}>
           <option value="">No default shift</option>

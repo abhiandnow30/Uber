@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Card, DataTable, DescriptionList, EmptyState, ErrorState, Input, Modal, PageHeader, Select, Spinner, StatusBadge, Tabs, Textarea, useToast, type Column } from '../../components/ui';
 import { errorMessage, get, post } from '../../lib/api';
 import { fieldErrors } from '../../lib/hooks';
+import { useUnsavedChanges } from '../../lib/unsaved';
 import { fmt12h, fmtDate, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 import { DriverPicker } from './Drivers';
 import { VEHICLE_STATUSES, VehicleFormModal, type VehicleRow } from './Vehicles';
@@ -40,11 +41,10 @@ function StatusModal({ open, onClose, vehicle, onDone }: { open: boolean; onClos
     }
   }, [open, vehicle.status]);
   const active = vehicle.assignments.filter((a) => a.status === 'ACTIVE').length;
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (): Promise<boolean> => {
     if (reason.trim().length < 3) {
       setErrors({ reason: 'Please enter at least 3 characters' });
-      return;
+      return false;
     }
     setBusy(true);
     setError('');
@@ -52,22 +52,30 @@ function StatusModal({ open, onClose, vehicle, onDone }: { open: boolean; onClos
       await post(`/ops/vehicles/${vehicle._id}/status`, { status, reason: reason.trim(), ...(status === 'MAINTENANCE' && due ? { maintenanceDueAt: due } : {}) });
       onDone();
       onClose();
+      return true;
     } catch (err) {
       setErrors(fieldErrors(err));
       setError(errorMessage(err));
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(open && (status !== vehicle.status || !!reason.trim() || !!due), save);
+  const close = () => guard(onClose);
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Change vehicle status"
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={close}>
             Cancel
           </Button>
           <Button type="submit" form="vstatus-form" loading={busy} disabled={status === vehicle.status}>

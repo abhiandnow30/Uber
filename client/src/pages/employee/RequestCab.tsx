@@ -7,6 +7,7 @@ import { ApiError, errorMessage, get, patch, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { addDaysISO, fmtTravelDate, todayISO, uuid } from '../../lib/format';
 import { fieldErrors } from '../../lib/hooks';
+import { changed, useUnsavedChanges } from '../../lib/unsaved';
 import { addMinutesHHmm, cabForShift, fmt12h, IN_LEAD_MINUTES, usePolicy } from '../../lib/policy';
 
 type Form = {
@@ -107,9 +108,16 @@ export default function RequestCab() {
   // The shift saved on the employee's account is pre-selected; changing it here does not change the account.
   const savedShift = (me?.profile as { defaultShift?: string } | undefined)?.defaultShift ?? '';
   const prefilled = useRef(false);
+  // What the form showed once filled in, to tell whether the person has changed anything.
+  const [start, setStart] = useState<Form | null>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (ready && !start) setStart(form);
+  }, [ready, start, form]);
   useEffect(() => {
     if (prefilled.current || !policy || (editId && !ride)) return;
     prefilled.current = true;
+    setReady(true);
     if (ride) {
       setForm({
         travelDate: ride.shiftDate ?? ride.travelDate,
@@ -152,20 +160,20 @@ export default function RequestCab() {
     return e;
   };
 
-  const submit = async (ev: FormEvent) => {
-    ev.preventDefault();
-    if (submitting) return;
+  /** Sends the request (or the change). `stay`: don't open the ride afterwards (saving on the way elsewhere). */
+  const save = async (stay = false): Promise<boolean> => {
+    if (submitting) return false;
     setFormError(null);
     const v = validate();
     setErrors(v);
-    if (Object.values(v).some(Boolean)) return;
+    if (Object.values(v).some(Boolean)) return false;
     if (!office) {
       setFormError({ title: 'Your office is not accepting cab requests', message: 'Please contact your administrator.' });
-      return;
+      return false;
     }
     if (!homeText) {
       setFormError({ title: 'Add your present address first', message: 'The transport team plans your cab route from it.' });
-      return;
+      return false;
     }
     setSubmitting(true);
     const details = {
@@ -180,8 +188,9 @@ export default function RequestCab() {
         qc.invalidateQueries({ queryKey: ['my-bookings'] });
         qc.invalidateQueries({ queryKey: ['employee-home'] });
         toast.success(`Ride updated · ${ride.reference}`, 'The transport team is told about the change.');
-        navigate(`/employee/bookings/${ride._id}`);
-        return;
+        guard.release();
+        if (!stay) navigate(`/employee/bookings/${ride._id}`);
+        return true;
       }
       const res = await post<CreateResult>('/me/bookings', { ...details, clientRequestId: requestId.current });
       requestId.current = uuid();
@@ -197,7 +206,9 @@ export default function RequestCab() {
             ? 'You will be told your pickup time when a cab and driver are assigned.'
             : 'You will be notified when a cab and driver are assigned.',
       );
-      navigate(`/employee/bookings/${res.booking._id}`);
+      guard.release();
+      if (!stay) navigate(`/employee/bookings/${res.booking._id}`);
+      return true;
     } catch (err) {
       const fields = fieldErrors(err) as Partial<Record<keyof Form, string>>;
       if (err instanceof ApiError) {
@@ -216,10 +227,16 @@ export default function RequestCab() {
         setFormError({ title: 'Could not submit your request', message: errorMessage(err) });
       }
       setErrors(fields);
+      return false;
     } finally {
       setSubmitting(false);
     }
   };
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault();
+    void save();
+  };
+  const guard = useUnsavedChanges(!!start && changed(form, start), () => save(true));
 
   if (policyQ.isLoading || (editId && editing.isLoading)) return <Spinner />;
   if (policyQ.error || !policy) return <ErrorState error={policyQ.error} onRetry={policyQ.refetch} />;
