@@ -21,9 +21,8 @@ import {
   type Column,
 } from '../../components/ui';
 import { errorMessage, get, patch, post } from '../../lib/api';
-import { fmtDateTime, humanize } from '../../lib/format';
 import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
-import { ACCOUNT_STATUSES, usePolicy } from '../../lib/policy';
+import { usePolicy } from '../../lib/policy';
 import { useSsoConfig } from '../../lib/sso';
 
 export type EmployeeRow = {
@@ -251,16 +250,70 @@ export function DeleteEmployeeDialog({ employee, onClose, onDeleted }: { employe
   );
 }
 
+/** Route edited right in the table: pick an existing cab or type a new one; saved on Enter or when leaving the box. */
+function RouteCell({ employee, routes }: { employee: EmployeeRow; routes: string[] }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [value, setValue] = useState(employee.route ?? '');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setValue(employee.route ?? ''), [employee.route]);
+
+  const save = async () => {
+    const route = value.trim();
+    if (route === (employee.route ?? '')) return;
+    setBusy(true);
+    try {
+      await patch(`/admin/employees/${employee._id}`, { route });
+      toast.success(route ? `${employee.fullName} → ${route}` : `Route cleared for ${employee.fullName}`);
+      qc.invalidateQueries({ queryKey: ['admin-employees'] });
+    } catch (err) {
+      toast.error('Could not save the route', errorMessage(err));
+      setValue(employee.route ?? '');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div onClick={(ev) => ev.stopPropagation()}>
+      <input
+        aria-label={`Route for ${employee.fullName}`}
+        list="employee-routes-inline"
+        maxLength={120}
+        value={value}
+        placeholder="Unknown"
+        disabled={busy}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            setValue(employee.route ?? '');
+            e.currentTarget.blur();
+          }
+        }}
+        className="h-9 w-44 rounded-lg border border-transparent bg-transparent px-2 text-sm text-slate-900 placeholder:text-slate-400 hover:border-slate-300 focus:border-indigo-500 focus:bg-white focus:outline-none"
+      />
+      <datalist id="employee-routes-inline">
+        {routes.map((r) => (
+          <option key={r} value={r} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
 export default function Employees() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const policy = usePolicy();
-  const list = useListState({ officeLocation: '', status: params.get('status') ?? '', employeeId: '' }, '-createdAt');
+  const list = useListState({ officeLocation: '', status: params.get('status') ?? '' }, '-createdAt');
   const { data, isLoading, error, refetch, isFetching } = usePaged<EmployeeRow>(['admin-employees'], '/admin/employees', list.query);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EmployeeRow | null>(null);
   const [deleting, setDeleting] = useState<EmployeeRow | null>(null);
   const toast = useToast();
+  const routes = useQuery({ queryKey: ['admin-employees', 'routes'], queryFn: () => get<string[]>('/admin/employees/routes') });
 
   const columns: Column<EmployeeRow>[] = [
     { key: 'employeeId', header: 'Employee ID', sortKey: 'employeeId', render: (e) => <span className="font-mono text-xs">{e.employeeId}</span> },
@@ -276,9 +329,8 @@ export default function Employees() {
     },
     { key: 'email', header: 'Email', sortKey: 'email', render: (e) => e.email },
     { key: 'office', header: 'Office', sortKey: 'officeLocation', render: (e) => e.officeLocation || '—' },
-    { key: 'route', header: 'Route', sortKey: 'route', render: (e) => e.route || <span className="text-slate-400">Unknown</span> },
+    { key: 'route', header: 'Route', sortKey: 'route', render: (e) => <RouteCell employee={e} routes={routes.data ?? []} /> },
     { key: 'status', header: 'Status', render: (e) => <StatusBadge status={e.status} /> },
-    { key: 'lastLogin', header: 'Last login', render: (e) => <span className="whitespace-nowrap">{fmtDateTime(e.lastLoginAt)}</span> },
     {
       key: 'actions',
       header: <span className="sr-only">Actions</span>,
@@ -330,25 +382,16 @@ export default function Employees() {
       />
 
       <Card className="mb-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="sm:col-span-2 lg:col-span-1">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="sm:col-span-2">
             <span className="mb-1 block text-sm font-medium text-slate-700">Search</span>
-            <SearchInput value={list.q} onChange={list.setSearch} placeholder="Name, email, ID, route" />
+            <SearchInput value={list.q} onChange={list.setSearch} placeholder="Name, email, employee ID or route" />
           </div>
-          <Input label="Employee ID" value={list.filters.employeeId} onChange={(e) => list.setFilter('employeeId', e.target.value)} placeholder="Exact ID" />
           <Select label="Office" value={list.filters.officeLocation} onChange={(e) => list.setFilter('officeLocation', e.target.value)}>
             <option value="">All offices</option>
             {policy.data?.officeLocations.map((o) => (
               <option key={o.code} value={o.code}>
                 {o.name} ({o.code})
-              </option>
-            ))}
-          </Select>
-          <Select label="Account status" value={list.filters.status} onChange={(e) => list.setFilter('status', e.target.value)}>
-            <option value="">All statuses</option>
-            {ACCOUNT_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {humanize(s)}
               </option>
             ))}
           </Select>
@@ -359,7 +402,7 @@ export default function Employees() {
               size="sm"
               variant="ghost"
               onClick={() => {
-                list.setFilters({ officeLocation: '', status: '', employeeId: '' });
+                list.setFilters({ officeLocation: '', status: '' });
                 list.setSearch('');
               }}
             >

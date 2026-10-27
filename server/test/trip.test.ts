@@ -33,7 +33,8 @@ describe('driver trip lifecycle and ride-start PIN', () => {
     expect(a!.startMethod).toBe('PIN');
     expect((await Driver.findById(s.drv.driver._id))!.availability).toBe('AVAILABLE');
     const events = (await TripStatusHistory.find({ booking: s.bookingId }).sort({ createdAt: 1 })).map((h) => h.event);
-    expect(events).toEqual(['REQUESTED', 'ASSIGNED', 'ACKNOWLEDGED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'TRIP_STARTED', 'COMPLETED']);
+    // no separate "acknowledged" step: an assigned ride is the driver's at once
+    expect(events).toEqual(['REQUESTED', 'ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'TRIP_STARTED', 'COMPLETED']);
 
     // duplicate completion and restarting a completed trip are rejected
     expect((await s.drv.client.post(`/api/driver/rides/${s.assignmentId}/complete`)).status).toBe(409);

@@ -467,7 +467,7 @@ export function AssignModal({ open, onClose, booking, mode = 'assign' }: { open:
               <Alert tone="info" title="What happens next">
                 <ul className="list-disc space-y-0.5 pl-4">
                   <li>The employee is emailed the vehicle number and driver details, and sees a ride-start PIN in their booking.</li>
-                  <li>The driver is notified in their dashboard and must acknowledge the ride.</li>
+                  <li>The driver is notified and the ride is theirs — no acceptance needed.</li>
                   {mode === 'reassign' && <li>The previous assignment is closed and its PIN revoked; a new PIN is issued.</li>}
                 </ul>
               </Alert>
@@ -1163,7 +1163,6 @@ export default function Bookings({ history = false }: { history?: boolean }) {
               {b.driver?.fullName ?? '—'}
               {b.driver?.phone ? <span className="text-slate-400"> · {b.driver.phone}</span> : null}
             </p>
-            {b.assignment?._id && !b.assignment.acknowledgedAt && <p className="text-xs text-amber-700">Driver hasn't confirmed yet</p>}
           </div>
         ) : (
           <span className="text-sm text-slate-400">Not assigned</span>
@@ -1216,7 +1215,8 @@ export default function Bookings({ history = false }: { history?: boolean }) {
                 Change cab
               </Button>,
             );
-          if (!b.isDelayed)
+          // Once the employee is in the cab there's nothing left to delay.
+          if (!b.isDelayed && b.status !== 'IN_PROGRESS')
             buttons.push(
               <Button key="dl" size="sm" variant="secondary" onClick={() => act('delay')}>
                 Mark delayed
@@ -1534,9 +1534,6 @@ function RideGroups({
                   </span>
                 )}
                 {shared?.vehicle?.capacity ? <SeatsFree capacity={shared.vehicle.capacity} used={all.reduce((n, r) => n + (r.passengers || 1), 0)} needed={0} /> : null}
-                {shared && all.some((r) => r.assignment?._id && !r.assignment.acknowledgedAt) && (
-                  <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Driver hasn&apos;t confirmed</span>
-                )}
               </span>
               <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
                 <span className="hidden sm:inline">{[...g.times.values()].map((list) => `${list[0].direction === 'IN' ? 'IN' : 'OUT'} ${fmt12h(groupTime(list[0]))}`).join(' · ')}</span>

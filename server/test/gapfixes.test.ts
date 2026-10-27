@@ -36,22 +36,19 @@ describe('create-admin bootstrap', () => {
 });
 
 describe('coordinator support actions for stuck trips', () => {
-  it('completes an in-progress trip on the driver\'s behalf with a reason, audited', async () => {
+  it('only the driver can complete a trip; coordinators cannot complete it on their behalf', async () => {
     const s = await scenario();
     const a = await assign(s.coord.client, s.bookingId, s.drv);
     await toArrived(s.drv.client, a.body.assignment._id);
     await s.drv.client.post(`/api/driver/rides/${a.body.assignment._id}/start`, { pin: await employeePin(s.emp.client!, s.bookingId) }).expect(200);
 
-    await s.coord.client.post(`/api/ops/bookings/${s.bookingId}/complete`, { reason: 'short' }).expect(422);
-    await s.coord.client.post(`/api/ops/bookings/${s.bookingId}/complete`, { reason: 'Driver phone battery died; employee confirmed drop-off' }).expect(200);
-    expect((await CabRequest.findById(s.bookingId))!.status).toBe('COMPLETED');
+    await s.coord.client.post(`/api/ops/bookings/${s.bookingId}/complete`, { reason: 'Driver phone battery died; employee confirmed drop-off' }).expect(403);
+    expect((await CabRequest.findById(s.bookingId))!.status).toBe('IN_PROGRESS');
+    await s.drv.client.post(`/api/driver/rides/${a.body.assignment._id}/complete`).expect(200);
     const asg = await CabAssignment.findById(a.body.assignment._id);
-    expect(asg!.completionMethod).toBe('OVERRIDE');
-    expect(String(asg!.completionOverrideBy)).toBe(String(s.coord.user._id));
+    expect(asg!.completionMethod).toBe('DRIVER');
     expect((await Driver.findById(s.drv.driver._id))!.availability).toBe('AVAILABLE');
-    expect(await AuditLog.exists({ action: 'SUPPORT_OVERRIDE_COMPLETE' })).toBeTruthy();
-    // cannot complete twice, by either side
-    await s.coord.client.post(`/api/ops/bookings/${s.bookingId}/complete`, { reason: 'Driver phone battery died again' }).expect(409);
+    // cannot complete twice
     await s.drv.client.post(`/api/driver/rides/${a.body.assignment._id}/complete`).expect(409);
   });
 

@@ -4,4 +4,10 @@ node_modules
 server/.data
 server/.dev-mailbox
 **/.env
+**/.env.*
+!**/.env.example
 .git
+.claude
+.vscode
+**/*.log
+**/coverage

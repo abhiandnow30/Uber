@@ -1,28 +1,65 @@
-# Local / staging stack: MongoDB single-node replica set + the app.
+# Server stack: MongoDB single-node replica set + the app.
 # Transactions require a replica set, so mongo starts with --replSet and is
 # initiated by the healthcheck.
+#
+# Nothing is exposed to the network:
+#  - MongoDB has no published port and sits on an internal-only network.
+#  - The app is published on 127.0.0.1:4000 only (this machine). Put a reverse
+#    proxy with HTTPS (nginx, Caddy, IIS…) on the host in front of it if other
+#    devices need access.
+name: neutara-cabs-booking
+
 services:
   mongo:
     image: mongo:7.0
+    container_name: neutara-cabs-booking-mongo
+    hostname: mongo
     command: ["--replSet", "rs0", "--bind_ip_all"]
-    ports: ["27017:27017"]
     volumes: ["mongo-data:/data/db"]
+    networks: [db]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok }"]
       interval: 5s
       timeout: 10s
       retries: 20
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
 
   app:
     build: .
+    image: neutara-cabs-booking-app:latest
+    container_name: neutara-cabs-booking-app
+    hostname: app
     depends_on:
       mongo:
         condition: service_healthy
     env_file: server/.env
     environment:
+      # Set here so a development server/.env can't switch off the production checks.
+      NODE_ENV: production
       MONGODB_URI: mongodb://mongo:27017/cab_booking?replicaSet=rs0
       PORT: 4000
-    ports: ["4000:4000"]
+    ports: ["127.0.0.1:4000:4000"]
+    # "db" reaches MongoDB; "egress" lets the app reach Microsoft sign-in and the mail server.
+    networks: [db, egress]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+networks:
+  # No route in or out: only the app can talk to MongoDB.
+  db:
+    name: neutara-cabs-booking-db
+    internal: true
+  egress:
+    name: neutara-cabs-booking-egress
 
 volumes:
   mongo-data:
+    name: neutara-cabs-booking-mongo-data

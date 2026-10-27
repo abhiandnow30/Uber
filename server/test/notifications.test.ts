@@ -8,7 +8,7 @@ import { EmailOutbox, Notification } from '../src/models/system.js';
 import { closeRealtime, initRealtime } from '../src/realtime.js';
 import { processOutboxBatch } from '../src/services/email/outbox.worker.js';
 import { renderEmail } from '../src/services/email/templates.js';
-import { detectLatePickups, detectUnacknowledged } from '../src/services/monitor.service.js';
+import { detectLatePickups } from '../src/services/monitor.service.js';
 import { enqueueEmail } from '../src/services/notification.service.js';
 import request from 'supertest';
 import { app, assign, drainOutbox, fakeEmail, makeAdmin, makeRetriesDue, scenario } from './helpers.js';
@@ -139,15 +139,10 @@ describe('in-app notifications and real-time delivery', () => {
 });
 
 describe('operational monitors', () => {
-  it('flags an unacknowledged assignment once, so the coordinator can reassign', async () => {
+  it('drivers do not accept rides: an assigned ride is theirs at once', async () => {
     const s = await scenario();
     const res = await assign(s.coord.client, s.bookingId, s.drv);
-    await CabAssignment.collection.updateOne({ _id: new mongoose.Types.ObjectId(res.body.assignment._id) }, { $set: { createdAt: new Date(Date.now() - 60 * 60_000) } });
-    await detectUnacknowledged();
-    await detectUnacknowledged();
-    expect(await Notification.countDocuments({ user: s.coord.user._id, type: 'UNACKNOWLEDGED_ASSIGNMENT' })).toBe(1);
-    // the assignment is still there; nothing disappears because the driver is offline
-    expect((await CabAssignment.findById(res.body.assignment._id))!.status).toBe('ACTIVE');
+    expect((await CabAssignment.findById(res.body.assignment._id))!.acknowledgedAt).toBeInstanceOf(Date);
   });
 
   it('detects late pickups and marks the booking delayed', async () => {

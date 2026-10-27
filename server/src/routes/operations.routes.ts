@@ -57,7 +57,7 @@ import {
 } from '../services/fleet.service.js';
 import { coordinatorDashboard, dashboardQuerySchema } from '../services/report.service.js';
 import { assertInScope, officeScope, scopeFilter } from '../services/scope.service.js';
-import { completeByOperations, noShowByOperations, overrideStart } from '../services/trip.service.js';
+import { noShowByOperations, overrideStart } from '../services/trip.service.js';
 import { AppError, notFound } from '../utils/errors.js';
 import { paged, paginationSchema } from '../utils/listing.js';
 
@@ -195,8 +195,9 @@ operationsRouter.post('/bookings/:id/regenerate-pin', async (req, res) => {
 operationsRouter.post('/bookings/:id/override-start', async (req, res) => {
   res.json(await overrideStart(actorFromRequest(req), objectId(req.params.id, 'Booking'), body(reason(10), req).reason));
 });
-operationsRouter.post('/bookings/:id/complete', async (req, res) => {
-  res.json(await completeByOperations(actorFromRequest(req), objectId(req.params.id, 'Booking'), body(reason(10), req).reason));
+// Only the driver completes a trip; nobody completes it on their behalf.
+operationsRouter.post('/bookings/:id/complete', () => {
+  throw new AppError(403, 'DRIVER_ONLY_COMPLETE', 'Only the driver can complete a trip.');
 });
 operationsRouter.post('/bookings/:id/no-show', async (req, res) => {
   res.json(await noShowByOperations(actorFromRequest(req), objectId(req.params.id, 'Booking'), body(reason(), req).reason));

@@ -125,7 +125,6 @@ type Dashboard = {
     status: string;
     employee?: { fullName: string; employeeId: string; route?: string } | null;
   }>;
-  unacknowledgedAssignments: number;
   cancellationRequests: number;
   driversOnDuty: number;
   driversAvailable: number;
@@ -153,14 +152,12 @@ export default function OpsDashboard() {
 
   const b = data?.bookings;
   const waiting = (b?.pendingAssignment ?? 0) + (b?.pendingApproval ?? 0);
-  const unconfirmed = data?.unacknowledgedAssignments ?? 0;
   const cancelAsks = data?.cancellationRequests ?? 0;
   const late = b?.delayed ?? 0;
   const dayLabel = day === 'today' ? "Today's shifts" : "Tomorrow's shifts";
 
   const actions: Array<{ key: string; tone: 'warn' | 'error'; text: string; button: string; to: string }> = [];
   if (waiting) actions.push({ key: 'waiting', tone: 'warn', text: `${plural(waiting, 'ride is', 'rides are')} waiting for a cab`, button: 'Assign cabs', to: requestsUrl(WAITING) });
-  if (unconfirmed) actions.push({ key: 'unconfirmed', tone: 'error', text: `${plural(unconfirmed, "driver hasn't", "drivers haven't")} confirmed their ride`, button: 'Check rides', to: requestsUrl(ASSIGNED) });
   if (cancelAsks)
     actions.push({ key: 'cancel', tone: 'warn', text: `${plural(cancelAsks, 'employee wants', 'employees want')} to cancel an assigned ride`, button: 'Review', to: `/ops/bookings${qs({ date: 'all', status: ASSIGNED, cancellationRequested: 'true' })}` });
   if (late) actions.push({ key: 'late', tone: 'error', text: `${plural(late, 'ride is', 'rides are')} running late`, button: 'See rides', to: requestsUrl(`${ASSIGNED},IN_PROGRESS`, { delayed: 'true' }) });

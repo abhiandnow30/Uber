@@ -172,6 +172,8 @@ async function reserve(tx: TxContext, actor: Actor, booking: CabRequestDoc, driv
         requestKey,
         tripId: trip?.id,
         tripName: trip?.name,
+        // Drivers don't accept rides: an assigned ride is theirs to do.
+        acknowledgedAt: new Date(),
       },
     ],
     { session },

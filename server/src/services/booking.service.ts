@@ -170,6 +170,34 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
   const existing = await CabRequest.findOne({ employeeUser: actor.id, clientRequestId: input.clientRequestId }).lean();
   if (existing) return { booking: existing, duplicate: true };
 
+  const { policy, office, direction, travelDate, pickupTime, shiftDate, shiftStart, shiftEnd, reportBy, pickupTimeSet, pickupLocation, dropLocation, scheduled, shiftDay } = await planRide(
+    employee,
+    input,
+  );
+  if (input.tripType === 'ROUND_TRIP') {
+    if (!policy.booking?.allowRoundTrip) throw badRequest('Round-trip bookings are not enabled');
+    if (!input.returnPickupTime || input.returnPickupTime <= pickupTime) throw badRequest('Return pickup time must be later than the outbound pickup time');
+  }
+  if (await hasCabForDay(actor.id, shiftDay)) throw shiftDayTaken(shiftDay);
+  const legs: Array<{ leg: 'OUTBOUND' | 'RETURN'; pickupTime: string; scheduled: Date; pickup: string; drop: string }> = [
+    { leg: 'OUTBOUND', pickupTime, scheduled, pickup: pickupLocation, drop: dropLocation },
+  ];
+  if (input.tripType === 'ROUND_TRIP') {
+    const ret = localToUtc(travelDate, input.returnPickupTime!, office.timezone);
+    if (!ret) throw badRequest('Invalid return pickup time');
+    legs.push({ leg: 'RETURN', pickupTime: input.returnPickupTime!, scheduled: ret, pickup: dropLocation, drop: pickupLocation });
+  }
+  return insertBookingLegs({ actor, employee, office, input, legs, plan: { travelDate, shiftDate, shiftStart, shiftEnd, direction, reportBy, pickupTimeSet, shiftDay } });
+}
+
+type RideInput = Pick<z.infer<typeof createBookingSchema>, 'travelDate' | 'pickupTime' | 'shiftStart' | 'shiftEnd' | 'direction' | 'shift' | 'officeLocation' | 'pickupLocation' | 'dropLocation' | 'passengers'>;
+
+/**
+ * Works out a ride from the employee's request, with every booking rule applied: the shift times
+ * decide IN (reach the office by the start) or OUT (leave at the end), the route comes from the
+ * saved address and the office, and the time must be bookable. Shared by requesting and editing.
+ */
+async function planRide(employee: { officeLocation?: string | null; homeAddress?: string | null }, input: RideInput) {
   const policy = await getPolicy();
   // Bookings always belong to the employee's own office, so only that office's coordinators handle them.
   if (input.officeLocation && input.officeLocation !== employee.officeLocation) {
@@ -244,23 +272,26 @@ export async function createBooking(actor: Actor, input: z.infer<typeof createBo
     dropLocation ||= fromOffice ? home : officeText;
   }
   if (pickupLocation.toLowerCase() === dropLocation.toLowerCase()) throw badRequest('Pickup and drop-off locations must differ');
-  if (input.tripType === 'ROUND_TRIP') {
-    if (!policy.booking?.allowRoundTrip) throw badRequest('Round-trip bookings are not enabled');
-    if (!input.returnPickupTime || input.returnPickupTime <= pickupTime) throw badRequest('Return pickup time must be later than the outbound pickup time');
-  }
   const scheduled = await validateBookingWindow({ travelDate, pickupTime }, office.timezone);
   // One cab per shift day: a 7 PM shift's 1 AM cab belongs to the day the shift started.
   const shiftDay = shiftDate ?? workDayOf(travelDate, pickupTime, winStart, winEnd);
-  if (await hasCabForDay(actor.id, shiftDay)) throw shiftDayTaken(shiftDay);
-  const legs: Array<{ leg: 'OUTBOUND' | 'RETURN'; pickupTime: string; scheduled: Date; pickup: string; drop: string }> = [
-    { leg: 'OUTBOUND', pickupTime, scheduled, pickup: pickupLocation, drop: dropLocation },
-  ];
-  if (input.tripType === 'ROUND_TRIP') {
-    const ret = localToUtc(travelDate, input.returnPickupTime!, office.timezone);
-    if (!ret) throw badRequest('Invalid return pickup time');
-    legs.push({ leg: 'RETURN', pickupTime: input.returnPickupTime!, scheduled: ret, pickup: dropLocation, drop: pickupLocation });
-  }
-  const approvalRequired = !!policy.booking?.approvalRequired;
+  return { policy, office, direction, travelDate, pickupTime, shiftDate, shiftStart, shiftEnd, reportBy, pickupTimeSet, pickupLocation, dropLocation, scheduled, shiftDay };
+}
+
+type RidePlan = Pick<Awaited<ReturnType<typeof planRide>>, 'travelDate' | 'shiftDate' | 'shiftStart' | 'shiftEnd' | 'direction' | 'reportBy' | 'pickupTimeSet' | 'shiftDay'>;
+
+/** Saves a new request (and its return leg, if any), with the employee's and coordinators' notifications. */
+async function insertBookingLegs(args: {
+  actor: Actor;
+  employee: { _id: unknown; email: string; fullName: string };
+  office: { code: string; timezone: string };
+  input: z.infer<typeof createBookingSchema>;
+  legs: Array<{ leg: 'OUTBOUND' | 'RETURN'; pickupTime: string; scheduled: Date; pickup: string; drop: string }>;
+  plan: RidePlan;
+}) {
+  const { actor, employee, office, input, legs } = args;
+  const { travelDate, shiftDate, shiftStart, shiftEnd, direction, reportBy, pickupTimeSet, shiftDay } = args.plan;
+  const approvalRequired = !!(await getPolicy()).booking?.approvalRequired;
   const status: BookingStatus = approvalRequired ? 'PENDING_APPROVAL' : 'REQUESTED';
   const tripGroupId = crypto.randomUUID();
 
@@ -392,8 +423,11 @@ export async function getMyBooking(actor: Actor, id: string) {
     pin,
     pinStatus,
     history,
-    canCancel: EMPLOYEE_CANCELLABLE.includes(booking.status as BookingStatus),
-    canRequestCancellation: CANCELLATION_REQUESTABLE.includes(booking.status as BookingStatus) && booking.cancellationRequest?.status !== 'PENDING',
+    canCancel: EMPLOYEE_CANCELLABLE.includes(booking.status as BookingStatus) || cabIsLate(booking),
+    // Until a cab is assigned the employee can change the ride.
+    canEdit: EMPLOYEE_CANCELLABLE.includes(booking.status as BookingStatus),
+    cabLate: cabIsLate(booking),
+    canRequestCancellation: CANCELLATION_REQUESTABLE.includes(booking.status as BookingStatus) && !cabIsLate(booking) && booking.cancellationRequest?.status !== 'PENDING',
   };
 }
 
@@ -401,10 +435,80 @@ export async function getMyBooking(actor: Actor, id: string) {
 const EMPLOYEE_CANCELLABLE: BookingStatus[] = ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED'];
 const CANCELLATION_REQUESTABLE: BookingStatus[] = ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'];
 
+/** Minutes past the pickup time after which a cab that hasn't arrived counts as late. */
+export const CAB_LATE_MINUTES = 15;
+/** An assigned cab that is running late (or hasn't arrived well after the pickup time): the employee may cancel it themselves. */
+export const cabIsLate = (b: { status: string; isDelayed?: boolean | null; scheduledPickupAt: Date }, now = Date.now()) =>
+  ['ASSIGNED', 'DRIVER_EN_ROUTE'].includes(b.status) && (!!b.isDelayed || +b.scheduledPickupAt < now - CAB_LATE_MINUTES * 60_000);
+
+export const updateBookingSchema = createBookingSchema.omit({ clientRequestId: true, tripType: true, returnPickupTime: true });
+
+/**
+ * The employee changes their ride (date, shift, shift times) while no cab is assigned. The new
+ * details go through the same rules as a new request, including one cab per work day.
+ */
+export async function updateMyBooking(actor: Actor, id: string, input: z.infer<typeof updateBookingSchema>) {
+  if (!mongoose.isValidObjectId(id)) throw notFound('Booking');
+  const current = await CabRequest.findOne({ _id: id, employeeUser: actor.id }).lean();
+  if (!current) throw notFound('Booking');
+  if (!EMPLOYEE_CANCELLABLE.includes(current.status as BookingStatus)) {
+    throw new AppError(422, 'EDIT_NOT_ALLOWED', 'A cab is already assigned, so this ride can no longer be changed. Cancel it or ask the admin.');
+  }
+  const employee = await Employee.findOne({ user: actor.id }).lean();
+  if (!employee) throw forbidden('Only registered employees can change cab requests');
+  const plan = await planRide(employee, input);
+  const currentDay = current.workDay ?? current.shiftDate ?? current.travelDate;
+  if (plan.shiftDay !== currentDay && (await hasCabForDay(actor.id, plan.shiftDay))) throw shiftDayTaken(plan.shiftDay);
+  try {
+    return await withTransaction(async (tx) => {
+      const b = await CabRequest.findOne({ _id: current._id, status: { $in: EMPLOYEE_CANCELLABLE } }).session(tx.session);
+      if (!b) throw new AppError(409, 'EDIT_NOT_ALLOWED', 'A cab was just assigned to this ride, so it can no longer be changed.');
+      const before = `${b.travelDate} ${fmt12h(b.pickupTime)}`;
+      b.set({
+        travelDate: plan.travelDate,
+        shiftDate: plan.shiftDate,
+        shiftStart: plan.shiftStart,
+        shiftEnd: plan.shiftEnd,
+        direction: plan.direction,
+        reportBy: plan.reportBy,
+        pickupTimeSet: plan.pickupTimeSet,
+        pickupTime: plan.pickupTime,
+        scheduledPickupAt: plan.scheduled,
+        pickupLocation: plan.pickupLocation,
+        dropLocation: plan.dropLocation,
+        shift: input.shift || undefined,
+        notes: input.notes ?? b.notes,
+        workDay: plan.shiftDay,
+        shiftDayKey: `${actor.id}:${plan.shiftDay}:${b.leg}`,
+        openSlotKey: `${actor.id}:${plan.scheduled.toISOString()}`,
+      });
+      await b.save();
+      await recordEvent(tx, b, 'UPDATED', actor, { meta: { before } });
+      await notifyCoordinators(tx, b.officeLocation, {
+        type: 'BOOKING_UPDATED',
+        title: 'Cab request changed by employee',
+        body: `${employee.fullName} · ${b.reference}: now ${b.direction === 'IN' ? `reach office by ${fmt12h(b.reportBy ?? b.pickupTime)}` : `leaves office ${fmt12h(b.pickupTime)}`} on ${b.travelDate}`,
+        data: { bookingId: String(b._id) },
+      });
+      await audit(actor, 'BOOKING_UPDATED', 'CabRequest', b._id, `Booking ${b.reference} changed`, { before, after: `${b.travelDate} ${fmt12h(b.pickupTime)}` }, tx.session);
+      tx.afterCommit(() => broadcastBookingUpdate(b));
+      return b;
+    });
+  } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      if (err.keyPattern?.shiftDayKey) throw shiftDayTaken(plan.shiftDay);
+      throw new AppError(409, 'DUPLICATE_BOOKING', 'You already have an open booking for this pickup time');
+    }
+    throw err;
+  }
+}
+
 export async function cancelMyBooking(actor: Actor, id: string, reason: string) {
   if (!mongoose.isValidObjectId(id)) throw notFound('Booking');
   const booking = await CabRequest.findOne({ _id: id, employeeUser: actor.id }).lean();
   if (!booking) throw notFound('Booking');
+  // The cab is late: the employee can cancel it directly, with their reason.
+  if (cabIsLate(booking)) return cancelBookingInternal(actor, booking._id, `Cab late — ${reason}`, ['ASSIGNED', 'DRIVER_EN_ROUTE']);
   if (!EMPLOYEE_CANCELLABLE.includes(booking.status as BookingStatus)) {
     throw new AppError(
       422,
@@ -489,7 +593,8 @@ export async function cancelBookingInternal(actor: Actor, bookingId: unknown, re
       actor,
       event: wasInProgress ? 'TRIP_INTERRUPTED' : 'CANCELLED',
       reason,
-      set: { cancelledBy: actor.id, cancelledByRole: actor.role, cancellationReason: reason, cancelledAt: new Date(), ...extraSet },
+      // An automatic cancellation (system) has no user.
+      set: { cancelledBy: actor.id || undefined, cancelledByRole: actor.role === 'SYSTEM' ? undefined : actor.role, cancellationReason: reason, cancelledAt: new Date(), ...extraSet },
       unset: ['openSlotKey', 'shiftDayKey'],
     });
     await endActiveAssignment(tx, updated, 'CANCELLED', actor, reason);
@@ -514,10 +619,12 @@ export async function cancelBookingInternal(actor: Actor, bookingId: unknown, re
         });
       }
     }
-    if (actor.role === 'EMPLOYEE') {
+    // Coordinators hear about cancellations they didn't make themselves.
+    if (actor.role === 'EMPLOYEE' || actor.role === 'DRIVER' || actor.role === 'SYSTEM') {
+      const by = { EMPLOYEE: 'by employee', DRIVER: 'by driver', SYSTEM: 'automatically' }[actor.role];
       await notifyCoordinators(tx, updated.officeLocation, {
         type: 'BOOKING_CANCELLED',
-        title: 'Booking cancelled by employee',
+        title: `Booking cancelled ${by}`,
         body: `${updated.reference} · ${reason}`,
         data: { bookingId: String(updated._id) },
       });
@@ -658,6 +765,8 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
     },
   );
   const [res] = await CabRequest.aggregate(pipeline);
+  // Email delivery is for admins only.
+  if (actor.role !== 'ADMIN') for (const i of res.items) delete i.notification;
   return paged(res.items, res.total[0]?.n ?? 0, p);
 }
 
@@ -669,7 +778,8 @@ export async function getBookingForOperations(actor: Actor, id: string) {
   const [assignments, history, emails, pinState] = await Promise.all([
     CabAssignment.find({ booking: booking._id }).sort({ createdAt: -1 }).populate('driver', 'fullName driverCode phone').populate('vehicle', 'registrationNumber model capacity').populate('assignedBy', 'name').lean(),
     TripStatusHistory.find({ booking: booking._id }).sort({ createdAt: 1 }).populate('actor', 'name').lean(),
-    EmailOutbox.find({ relatedBooking: booking._id }).sort({ createdAt: -1 }).select('template to status attempts lastError acceptedAt createdAt provider').lean(),
+    // Emails are shown to admins only.
+    actor.role !== 'ADMIN' ? [] : EmailOutbox.find({ relatedBooking: booking._id }).sort({ createdAt: -1 }).select('template to status attempts lastError acceptedAt createdAt provider').lean(),
     booking.currentAssignment ? RideStartCredential.findOne({ assignment: booking.currentAssignment }).sort({ createdAt: -1 }).select('status attempts maxAttempts expiresAt usedAt').lean() : null,
   ]);
   // Coordinators never see the PIN itself, only its state.

@@ -208,9 +208,12 @@ describe('Entra ID single sign-on', () => {
     expect(await User.exists({ email: 't@company.com' })).toBeNull();
   });
 
-  it('employees cannot use passwords at all once Microsoft sign-in is on; admins still can', async () => {
+  it('nobody but the password fallback uses passwords once Microsoft sign-in is on (employees and admins)', async () => {
     const emp = await makeEmployee({ email: 'pw.emp@company.com' });
+    // signed in before Microsoft sign-in was switched on
+    Object.assign(config, { ssoEnabled: false });
     const { client: admin } = await makeAdmin();
+    Object.assign(config, { ssoEnabled: true });
     const res = await anonymous().post('/api/auth/login', { email: 'pw.emp@company.com', password: PASSWORD });
     expect(res.status).toBe(401);
     // identical to an unknown account, so the form doesn't reveal who is an employee
@@ -233,8 +236,9 @@ describe('Entra ID single sign-on', () => {
     expect((await admin.post(`/api/admin/employees/${created.body._id}/invitation`)).status).toBe(409);
     expect((await signIn({ oid: 'oid-ms1', tid: 'tenant-1', preferred_username: 'ms.only@company.com' })).ok).toBe(true);
 
-    // the admin password flow is untouched
+    // an existing admin session keeps working, but admins can no longer sign in with a password
     expect((await admin.get('/api/auth/me')).status).toBe(200);
+    expect((await anonymous().post('/api/auth/login', { email: 'admin@test.com', password: PASSWORD })).status).toBe(401);
   });
 
   it('activation links already sent to employees stop working once Microsoft sign-in is on', async () => {
@@ -260,7 +264,9 @@ describe('Entra ID single sign-on', () => {
   });
 
   it('admins added on the Admins page sign in with Microsoft; no set-password email is sent', async () => {
-    const { client: boot } = await makeAdmin('bootstrap.admin@company.com'); // test admin keeps its password
+    Object.assign(config, { ssoEnabled: false });
+    const { client: boot } = await makeAdmin('bootstrap.admin@company.com'); // signed in before Microsoft sign-in was on
+    Object.assign(config, { ssoEnabled: true });
     const added = await boot.post('/api/admin/admins', { fullName: 'Real Admin', email: 'real.admin@company.com', phone: '9000050005' });
     expect(added.status).toBe(201);
     await drainOutbox();
@@ -272,8 +278,8 @@ describe('Entra ID single sign-on', () => {
     expect(r.ok).toBe(true);
     expect(await User.findById(added.body._id).lean()).toMatchObject({ status: 'ACTIVE', entraOid: 'oid-real-admin' });
 
-    // the bootstrap admin's password sign-in still works, so it can be removed later by the real admins
-    expect((await anonymous().post('/api/auth/login', { email: 'bootstrap.admin@company.com', password: PASSWORD })).status).toBe(200);
+    // with Microsoft sign-in on, admin passwords no longer work
+    expect((await anonymous().post('/api/auth/login', { email: 'bootstrap.admin@company.com', password: PASSWORD })).status).toBe(401);
   });
 
   it('drivers cannot sign in with Microsoft either', async () => {

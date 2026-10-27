@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, Car, Phone, Plus, X } from 'lucide-react';
+import { CalendarClock, Car, Pencil, Phone, Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, ConfirmDialog, EmptyState, ErrorState, PageHeader, Spinner, cn, useToast } from '../../components/ui';
+import { Alert, Button, Card, EmptyState, ErrorState, PageHeader, Spinner, cn, useToast } from '../../components/ui';
+import { CancelRideDialog, cabIsLate } from './CancelRideDialog';
 import { get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fmtTravelDate } from '../../lib/format';
@@ -109,8 +110,17 @@ function NextRideCard({ b, onCancel }: { b: HomeBooking; onCancel: (b: HomeBooki
         </div>
       ) : null}
 
-      {waiting && (
-        <div className="mt-4 flex justify-end">
+      {/* Before a cab is assigned, or once the assigned cab is late, the employee cancels it themselves. */}
+      {(waiting || cabIsLate(b)) && (
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
+          {cabIsLate(b) && <span className="text-sm text-slate-600">Cab running late? You can cancel it.</span>}
+          {waiting && (
+            <Link to={`/employee/request?edit=${b._id}`}>
+              <Button size="sm" variant="secondary" icon={<Pencil className="h-4 w-4" aria-hidden />}>
+                Change ride
+              </Button>
+            </Link>
+          )}
           <Button size="sm" variant="danger" icon={<X className="h-4 w-4" aria-hidden />} onClick={() => onCancel(b)}>
             Cancel ride
           </Button>
@@ -213,23 +223,12 @@ export default function EmployeeHome() {
         )
       ) : null}
 
-      <ConfirmDialog
+      <CancelRideDialog
         open={!!cancelling}
+        late={!!cancelling && cabIsLate(cancelling)}
         onClose={() => setCancelling(null)}
         onConfirm={cancel}
-        title="Cancel this ride?"
-        message={
-          cancelling && (
-            <>
-              <p>
-                {cancelling.reference} · {fmtTravelDate(cancelling.travelDate)} · {pickupLabel(cancelling)}
-              </p>
-              <p className="mt-1 text-slate-500">This cannot be undone. You can request a cab for that day again afterwards.</p>
-            </>
-          )
-        }
-        confirmLabel="Cancel ride"
-        reasonLabel="Reason for cancelling"
+        summary={cancelling && <p>{cancelling.reference} · {fmtTravelDate(cancelling.travelDate)} · {pickupLabel(cancelling)}</p>}
       />
     </>
   );

@@ -9,7 +9,8 @@ import { hashPin, safeEqualHex } from '../utils/crypto.js';
 import { AppError, badRequest, forbidden, notFound } from '../utils/errors.js';
 import { audit, type Actor } from './audit.service.js';
 import { refreshDriverAvailability } from './availability.service.js';
-import { endActiveAssignment } from './booking.service.js';
+import { cancelBookingInternal, endActiveAssignment } from './booking.service.js';
+import { z } from 'zod';
 import { alertOperations } from './alert.service.js';
 import { bookingEmailParams, notifyCoordinators, recordEvent, transitionBooking } from './lifecycle.js';
 import { enqueueEmail, notifyInApp } from './notification.service.js';
@@ -403,6 +404,30 @@ export async function markNoShow(actor: Actor, assignmentId: string, reason: str
   return recordNoShow(actor, { driverId: driver._id, assignment, booking }, reason);
 }
 
+/**
+ * A driver may cancel only because of the employee: they didn't show up at the pickup (recorded
+ * as a no-show), said they're not coming, or another reason they explain. Drivers can't drop a
+ * ride for their own reasons; that goes through the coordinator.
+ */
+export const DRIVER_CANCEL_REASONS = { NO_SHOW: "Employee didn't show up", NOT_COMING: "Employee said they're not coming", OTHER: 'Other' } as const;
+export const driverCancelSchema = z
+  .object({ reason: z.enum(['NO_SHOW', 'NOT_COMING', 'OTHER']), note: z.string().trim().max(300).optional() })
+  .refine((v) => v.reason !== 'OTHER' || (v.note?.length ?? 0) >= 3, { message: 'Say why the ride is cancelled', path: ['note'] });
+
+export async function driverCancel(actor: Actor, assignmentId: string, input: z.infer<typeof driverCancelSchema>) {
+  const { driver, assignment, booking } = await myAssignment(actor, assignmentId);
+  requireActive(assignment);
+  const text = input.reason === 'OTHER' ? input.note! : `${DRIVER_CANCEL_REASONS[input.reason]}${input.note ? ` — ${input.note}` : ''}`;
+  if (input.reason === 'NO_SHOW') {
+    if (booking.status !== 'ARRIVED') throw new AppError(409, 'INVALID_TRANSITION', 'Tap "Arrived" at the pickup first — a no-show is recorded there');
+    return recordNoShow(actor, { driverId: driver._id, assignment, booking }, text);
+  }
+  if (!['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'].includes(booking.status)) throw new AppError(409, 'INVALID_TRANSITION', `This ride is ${booking.status.toLowerCase()} and can't be cancelled`);
+  const updated = await cancelBookingInternal(actor, booking._id, `Cancelled by driver: ${text}`, ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED']);
+  await refreshDriverAvailability(driver._id);
+  return updated;
+}
+
 /** Coordinator/admin view of the booking's live assignment (scope-checked). */
 async function operationsAssignment(actor: Actor, bookingId: string) {
   const booking = await CabRequest.findById(bookingId);
@@ -411,14 +436,6 @@ async function operationsAssignment(actor: Actor, bookingId: string) {
   const assignment = booking.currentAssignment ? await CabAssignment.findOne({ _id: booking.currentAssignment, status: 'ACTIVE' }) : null;
   if (!assignment) throw new AppError(409, 'ASSIGNMENT_NOT_ACTIVE', 'This booking has no active assignment');
   return { booking, assignment };
-}
-
-/** Support action: complete a trip on the driver's behalf (e.g. driver device failure). Audited. */
-export async function completeByOperations(actor: Actor, bookingId: string, reason: string) {
-  if (!reason || reason.trim().length < 10) throw badRequest('Describe why the driver could not complete the trip (at least 10 characters)');
-  const { booking, assignment } = await operationsAssignment(actor, bookingId);
-  if (booking.status !== 'IN_PROGRESS') throw new AppError(409, 'INVALID_TRANSITION', 'Only a trip in progress can be completed');
-  return finishTrip(actor, { driverId: assignment.driver, assignment, booking }, { override: { by: actor, reason: reason.trim() } });
 }
 
 /** Support action: record a no-show reported to the transport team (e.g. by phone). */

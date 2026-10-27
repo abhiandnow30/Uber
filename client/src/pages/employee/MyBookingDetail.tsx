@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, Eye, EyeOff, KeyRound, Phone } from 'lucide-react';
+import { KeyRound, Phone } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, PageHeader, Spinner, StatusBadge, useToast } from '../../components/ui';
 import { ApiError, get, post } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 import { pickupLabel } from '../../lib/policy';
+import { CancelRideDialog } from './CancelRideDialog';
 
 type HistoryEntry = { _id: string; from?: string; to: string; event: string; reason?: string; actorRole?: string; createdAt: string };
 
@@ -49,6 +50,10 @@ type BookingDetail = {
   pinStatus: string | null;
   history: HistoryEntry[];
   canCancel: boolean;
+  // No cab assigned yet: the employee may still change the ride.
+  canEdit?: boolean;
+  // The assigned cab is late: the employee may cancel it themselves (with a reason).
+  cabLate?: boolean;
   canRequestCancellation: boolean;
   cancellationRequest?: { status: 'PENDING' | 'APPROVED' | 'DECLINED'; reason?: string; requestedAt?: string; decidedAt?: string; note?: string } | null;
 };
@@ -57,36 +62,21 @@ const ACTIVE = ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'DRIVER
 export const PRE_START = ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'];
 
 export function PinCard({ pin, tz }: { pin: { code: string; expiresAt: string }; tz: string }) {
-  const toast = useToast();
-  const [shown, setShown] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(pin.code);
-      toast.success('PIN copied');
-    } catch {
-      toast.error('Could not copy', 'Please read the PIN from the screen instead.');
-    }
-  };
   return (
     <section className="rounded-xl border-2 border-indigo-200 bg-indigo-50/60 p-4 shadow-xs" aria-labelledby="pin-title">
       <h2 id="pin-title" className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-indigo-900">
         <KeyRound className="h-4 w-4" aria-hidden /> Ride-start PIN
       </h2>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <span className="select-all rounded-lg bg-white px-4 py-2 font-mono text-3xl font-bold tracking-[0.4em] text-slate-900 shadow-inner sm:text-4xl" aria-label={shown ? `PIN ${pin.code.split('').join(' ')}` : 'PIN hidden'}>
-          {shown ? pin.code : '•'.repeat(pin.code.length)}
-        </span>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setShown((s) => !s)} icon={shown ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />} aria-pressed={shown}>
-            {shown ? 'Hide' : 'Show'}
-          </Button>
-          <Button variant="secondary" onClick={copy} icon={<Copy className="h-4 w-4" aria-hidden />}>
-            Copy
-          </Button>
-        </div>
+      {/* Always visible: the employee reads it out to the driver. */}
+      <div className="mt-3 flex gap-2" aria-label={`PIN ${pin.code.split('').join(' ')}`}>
+        {pin.code.split('').map((d, i) => (
+          <span key={i} className="flex h-16 w-14 items-center justify-center rounded-xl border-2 border-indigo-200 bg-white font-mono text-4xl font-bold text-slate-900" aria-hidden>
+            {d}
+          </span>
+        ))}
       </div>
       <p className="mt-2 text-xs text-slate-600">Valid until {fmtDateTime(pin.expiresAt, tz)}</p>
-      <p className="mt-3 text-sm font-medium text-indigo-900">Share this PIN with the driver only after you are inside the vehicle. Never share it by message.</p>
+      <p className="mt-3 text-sm font-medium text-indigo-900">Tell this PIN to the driver once you are inside the cab.</p>
     </section>
   );
 }
@@ -181,7 +171,6 @@ export default function MyBookingDetail() {
                 ],
                 ['Vehicle', a.vehicle?.registrationNumber ? <span className="font-mono">{a.vehicle.registrationNumber}</span> : null],
                 ['Model', a.vehicle?.model || (a.vehicle?.vehicleType ? humanize(a.vehicle.vehicleType) : null)],
-                ['Acknowledged', a.acknowledgedAt ? fmtDateTime(a.acknowledgedAt, tz) : 'Not yet'],
                 ['On the way', a.enRouteAt ? fmtDateTime(a.enRouteAt, tz) : null],
                 ['Arrived', a.arrivedAt ? fmtDateTime(a.arrivedAt, tz) : null],
                 ['Trip started', a.startedAt ? fmtDateTime(a.startedAt, tz) : null],
@@ -212,10 +201,19 @@ export default function MyBookingDetail() {
           <Card title="Cancellation">
             {b.canCancel ? (
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm text-slate-600">No cab is assigned yet, so you can cancel this booking yourself.</p>
-                <Button variant="danger" onClick={() => setCancelOpen(true)}>
-                  Cancel booking
-                </Button>
+                <p className="text-sm text-slate-600">
+                  {b.cabLate ? 'Your cab is running late, so you can cancel this ride yourself.' : 'No cab is assigned yet, so you can cancel this booking yourself.'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {b.canEdit && (
+                    <Link to={`/employee/request?edit=${b._id}`}>
+                      <Button variant="secondary">Change ride</Button>
+                    </Link>
+                  )}
+                  <Button variant="danger" onClick={() => setCancelOpen(true)}>
+                    Cancel booking
+                  </Button>
+                </div>
               </div>
             ) : cr?.status === 'PENDING' ? (
               <Alert tone="info" title="Cancellation requested">
@@ -262,21 +260,16 @@ export default function MyBookingDetail() {
         </Card>
       </div>
 
-      <ConfirmDialog
+      <CancelRideDialog
         open={cancelOpen}
+        late={!!b.cabLate}
         onClose={() => setCancelOpen(false)}
         onConfirm={cancel}
-        title="Cancel this booking?"
-        message={
-          <>
-            <p>
-              {b.reference} · {fmtTravelDate(b.travelDate)} · {pickupLabel(b)}
-            </p>
-            <p className="mt-1 text-slate-500">This cannot be undone.</p>
-          </>
+        summary={
+          <p>
+            {b.reference} · {fmtTravelDate(b.travelDate)} · {pickupLabel(b)}
+          </p>
         }
-        confirmLabel="Cancel booking"
-        reasonLabel="Reason for cancelling"
       />
       <ConfirmDialog
         open={requestOpen}

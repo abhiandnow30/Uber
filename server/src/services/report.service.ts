@@ -95,8 +95,7 @@ export async function coordinatorDashboard(actor: Actor, q: z.infer<typeof dashb
   const workDay = q.date ?? (q.day === 'tomorrow' ? DateTime.fromISO(today).plus({ days: 1 }).toFormat('yyyy-MM-dd') : today);
   const officeMatch = q.officeLocation ? { officeLocation: q.officeLocation } : scopeFilter(scope);
   const dayMatch = { ...officeMatch, ...workDayMatch(workDay) };
-  const ackCutoff = new Date(Date.now() - ((await getPolicy()).assignment?.acknowledgementTimeoutMinutes ?? 30) * 60_000);
-  const [bookings, delayed, nextWaiting, unacknowledged, cancellationRequests, driversOnDuty, driversAvailable, activeCabs, cabsWithoutDriver] = await Promise.all([
+  const [bookings, delayed, nextWaiting, cancellationRequests, driversOnDuty, driversAvailable, activeCabs, cabsWithoutDriver] = await Promise.all([
     bookingCounts(dayMatch),
     CabRequest.countDocuments({ ...dayMatch, isDelayed: true, status: { $in: ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'] } }),
     CabRequest.find({ ...dayMatch, status: { $in: ['REQUESTED', 'APPROVED', 'PENDING_APPROVAL'] } })
@@ -105,7 +104,6 @@ export async function coordinatorDashboard(actor: Actor, q: z.infer<typeof dashb
       .select('reference travelDate pickupTime pickupLocation dropLocation status employee')
       .populate('employee', 'fullName employeeId route')
       .lean(),
-    CabAssignment.countDocuments({ ...officeMatch, status: 'ACTIVE', acknowledgedAt: null, createdAt: { $lt: ackCutoff } }),
     CabRequest.countDocuments({ ...officeMatch, 'cancellationRequest.status': 'PENDING' }),
     Driver.countDocuments({ ...officeMatch, onDuty: true, employmentStatus: 'ACTIVE' }),
     Driver.countDocuments({ ...officeMatch, availability: 'AVAILABLE' }),
@@ -118,7 +116,6 @@ export async function coordinatorDashboard(actor: Actor, q: z.infer<typeof dashb
     offices: scope,
     bookings: { ...bookings, delayed },
     nextWaiting,
-    unacknowledgedAssignments: unacknowledged,
     cancellationRequests,
     driversOnDuty,
     driversAvailable,

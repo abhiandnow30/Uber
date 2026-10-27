@@ -55,8 +55,12 @@ describe('end-to-end workflow', () => {
     const assignedMail = fakeEmail.to('nisha.verma@test.com').find((m) => m.subject === `Your Cab Has Been Assigned — ${travelDate}`);
     expect(assignedMail?.text).toContain('Vehicle Number: TS09EE7777');
     expect(assignedMail?.text).toContain('Driver Name: Mohan Singh');
+    // Email delivery is visible to admins only
+    const adminView = await admin.get(`/api/ops/bookings?date=${travelDate}`);
+    expect(adminView.body.items[0].notification.status).toBe('ACCEPTED');
     const coordView = await coord.get(`/api/ops/bookings?date=${travelDate}`);
-    expect(coordView.body.items[0].notification.status).toBe('ACCEPTED');
+    expect(coordView.body.items[0].notification).toBeUndefined();
+    expect((await coord.get(`/api/ops/bookings/${bookingId}`)).body.emails).toEqual([]);
 
     // 13-14. Driver sees in-app notification and acknowledges
     const notes = await driver.get('/api/notifications?unreadOnly=true');
@@ -85,11 +89,12 @@ describe('end-to-end workflow', () => {
     expect((await Driver.findById(d.body._id))!.availability).toBe('AVAILABLE');
     await drainOutbox();
     expect(fakeEmail.to('nisha.verma@test.com').some((m) => m.subject.startsWith('Trip Completed'))).toBe(true);
-    expect(await TripStatusHistory.countDocuments({ booking: bookingId })).toBeGreaterThanOrEqual(7);
+    // requested, assigned, en route, arrived, started, completed (no separate "acknowledged" step any more)
+    expect(await TripStatusHistory.countDocuments({ booking: bookingId })).toBeGreaterThanOrEqual(6);
 
     // 23. Admin audit trail and reports
     const actions = (await AuditLog.find().lean()).map((l) => l.action);
-    for (const act of ['EMPLOYEE_CREATED', 'ACCOUNT_ACTIVATED', 'DRIVER_CREATED', 'DRIVER_VEHICLE_LINKED', 'BOOKING_CREATED', 'RIDE_ASSIGNED', 'RIDE_ACKNOWLEDGED', 'RIDE_STARTED', 'RIDE_COMPLETED']) {
+    for (const act of ['EMPLOYEE_CREATED', 'ACCOUNT_ACTIVATED', 'DRIVER_CREATED', 'DRIVER_VEHICLE_LINKED', 'BOOKING_CREATED', 'RIDE_ASSIGNED', 'RIDE_STARTED', 'RIDE_COMPLETED']) {
       expect(actions).toContain(act);
     }
     const report = await admin.get(`/api/admin/reports?from=${travelDate}&to=${travelDate}`);

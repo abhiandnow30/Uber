@@ -18,6 +18,7 @@ import {
   type Column,
 } from '../../components/ui';
 import { get, post } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
 import { fmt12h, fmtDateTime, fmtRelative, fmtTravelDate, humanize, mapsDirectionsUrl } from '../../lib/format';
 import { ASSIGNABLE, AssignModal, REASSIGNABLE, type AssignTarget } from './Bookings';
 
@@ -25,8 +26,18 @@ type Person = { _id: string; name: string } | null | undefined;
 type Assignment = {
   _id: string;
   status: string;
-  driver?: { _id: string; fullName: string; driverCode: string; phone: string } | null;
-  vehicle?: { _id: string; registrationNumber: string; model: string; capacity: number } | null;
+  driver?: {
+    _id: string;
+    fullName: string;
+    driverCode: string;
+    phone: string;
+  } | null;
+  vehicle?: {
+    _id: string;
+    registrationNumber: string;
+    model: string;
+    capacity: number;
+  } | null;
   assignedBy?: Person;
   acknowledgedAt?: string;
   declinedAt?: string;
@@ -43,8 +54,26 @@ type Assignment = {
   endReason?: string;
   createdAt: string;
 };
-type HistoryRow = { _id: string; from?: string; to: string; event: string; actor?: Person; actorRole?: string; reason?: string; createdAt: string };
-type EmailRow = { _id: string; template: string; to: string; status: string; attempts: number; lastError?: string; acceptedAt?: string; createdAt: string };
+type HistoryRow = {
+  _id: string;
+  from?: string;
+  to: string;
+  event: string;
+  actor?: Person;
+  actorRole?: string;
+  reason?: string;
+  createdAt: string;
+};
+type EmailRow = {
+  _id: string;
+  template: string;
+  to: string;
+  status: string;
+  attempts: number;
+  lastError?: string;
+  acceptedAt?: string;
+  createdAt: string;
+};
 type BookingDetailData = {
   _id: string;
   reference: string;
@@ -73,20 +102,50 @@ type BookingDetailData = {
   delayReason?: string;
   flaggedForReview?: boolean;
   flagReason?: string;
-  cancellationRequest?: { status: 'PENDING' | 'APPROVED' | 'DECLINED'; reason?: string; requestedAt?: string; decidedAt?: string; note?: string } | null;
+  cancellationRequest?: {
+    status: 'PENDING' | 'APPROVED' | 'DECLINED';
+    reason?: string;
+    requestedAt?: string;
+    decidedAt?: string;
+    note?: string;
+  } | null;
   currentAssignment?: string | null;
   createdAt: string;
-  employee: { _id: string; fullName: string; employeeId: string; email: string; phone?: string; officeLocation?: string };
+  employee: {
+    _id: string;
+    fullName: string;
+    employeeId: string;
+    email: string;
+    phone?: string;
+    officeLocation?: string;
+  };
   assignments: Assignment[];
   history: HistoryRow[];
   emails: EmailRow[];
-  pinState: { status: string; attempts: number; maxAttempts: number; expiresAt: string; usedAt?: string } | null;
+  pinState: {
+    status: string;
+    attempts: number;
+    maxAttempts: number;
+    expiresAt: string;
+    usedAt?: string;
+  } | null;
 };
 
 const OPEN = ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'];
 
-type ActionKey = 'approve' | 'reject' | 'cancel' | 'delay' | 'clearFlag' | 'regenPin' | 'override' | 'supportComplete' | 'noShow' | 'approveCancel' | 'declineCancel';
-type ActionDef = { title: string; message: ReactNode; confirmLabel: string; tone?: 'danger' | 'primary'; reasonLabel?: string; reasonMinLength?: number; path: string; success: string; withReason: boolean; bodyKey?: string };
+type ActionKey = 'approve' | 'reject' | 'cancel' | 'delay' | 'clearFlag' | 'regenPin' | 'override' | 'noShow' | 'approveCancel' | 'declineCancel';
+type ActionDef = {
+  title: string;
+  message: ReactNode;
+  confirmLabel: string;
+  tone?: 'danger' | 'primary';
+  reasonLabel?: string;
+  reasonMinLength?: number;
+  path: string;
+  success: string;
+  withReason: boolean;
+  bodyKey?: string;
+};
 
 function Step({ label, at, tz }: { label: string; at?: string; tz?: string }) {
   return (
@@ -100,11 +159,17 @@ function Step({ label, at, tz }: { label: string; at?: string; tz?: string }) {
 
 export default function BookingDetail() {
   const { id = '' } = useParams();
+  const isAdmin = useAuth().me?.user.role === 'ADMIN';
   const qc = useQueryClient();
   const toast = useToast();
   const [action, setAction] = useState<ActionKey | null>(null);
   const [assignMode, setAssignMode] = useState<'assign' | 'reassign' | null>(null);
-  const { data: b, isLoading, error, refetch } = useQuery({
+  const {
+    data: b,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['ops', 'booking', id],
     queryFn: ({ signal }) => get<BookingDetailData>(`/ops/bookings/${id}`, signal),
   });
@@ -149,8 +214,8 @@ export default function BookingDetail() {
             title: 'End interrupted trip',
             message: (
               <Alert tone="error" title="This trip is in progress">
-                Only use this when the ride was genuinely interrupted (breakdown, accident, emergency). The trip is closed as cancelled, the driver is released, and the transport team
-                is notified. This cannot be undone.
+                Only use this when the ride was genuinely interrupted (breakdown, accident, emergency). The trip is closed as cancelled, the driver is released, and the transport
+                team is notified. This cannot be undone.
               </Alert>
             ),
             confirmLabel: 'End interrupted trip',
@@ -224,8 +289,8 @@ export default function BookingDetail() {
       message: (
         <div className="space-y-2">
           <Alert tone="error" title="This bypasses PIN verification">
-            Starting the trip without the employee&apos;s PIN skips the identity check that protects employees. Use it only after confirming by phone that the right employee is in the
-            right vehicle. The action is audited with your name and reason.
+            Starting the trip without the employee&apos;s PIN skips the identity check that protects employees. Use it only after confirming by phone that the right employee is in
+            the right vehicle. The action is audited with your name and reason.
           </Alert>
         </div>
       ),
@@ -234,20 +299,6 @@ export default function BookingDetail() {
       reasonMinLength: 10,
       path: 'override-start',
       success: 'Trip started by support override',
-      withReason: true,
-    },
-    supportComplete: {
-      title: 'Complete trip on the driver’s behalf',
-      message: (
-        <Alert tone="warn" title="Use only when the driver cannot complete the trip">
-          For example when the driver&apos;s phone has died. Confirm with the employee or driver that the trip actually ended. The action is audited with your name and reason, and the driver is notified.
-        </Alert>
-      ),
-      confirmLabel: 'Mark trip completed',
-      reasonLabel: 'What happened? (min. 10 characters)',
-      reasonMinLength: 10,
-      path: 'complete',
-      success: 'Trip marked completed',
       withReason: true,
     },
     noShow: {
@@ -284,20 +335,82 @@ export default function BookingDetail() {
   };
 
   const assignmentCols: Column<Assignment>[] = [
-    { key: 'when', header: 'Assigned', render: (a) => <span className="whitespace-nowrap">{fmtDateTime(a.createdAt, tz)}</span> },
-    { key: 'driver', header: 'Driver', render: (a) => (a.driver ? <Link className="text-indigo-600 hover:underline" to={`/ops/drivers/${a.driver._id}`}>{a.driver.fullName} ({a.driver.driverCode})</Link> : '—') },
-    { key: 'vehicle', header: 'Vehicle', render: (a) => (a.vehicle ? <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${a.vehicle._id}`}>{a.vehicle.registrationNumber}</Link> : '—') },
+    {
+      key: 'when',
+      header: 'Assigned',
+      render: (a) => <span className="whitespace-nowrap">{fmtDateTime(a.createdAt, tz)}</span>,
+    },
+    {
+      key: 'driver',
+      header: 'Driver',
+      render: (a) =>
+        a.driver ? (
+          <Link className="text-indigo-600 hover:underline" to={`/ops/drivers/${a.driver._id}`}>
+            {a.driver.fullName} ({a.driver.driverCode})
+          </Link>
+        ) : (
+          '—'
+        ),
+    },
+    {
+      key: 'vehicle',
+      header: 'Vehicle',
+      render: (a) =>
+        a.vehicle ? (
+          <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${a.vehicle._id}`}>
+            {a.vehicle.registrationNumber}
+          </Link>
+        ) : (
+          '—'
+        ),
+    },
     { key: 'by', header: 'By', render: (a) => a.assignedBy?.name ?? '—' },
-    { key: 'status', header: 'Status', render: (a) => <StatusBadge status={a.status} /> },
-    { key: 'end', header: 'Ended / reason', render: (a) => (a.endedAt || a.declinedAt ? <span className="text-xs">{fmtDateTime(a.endedAt ?? a.declinedAt, tz)} — {a.endReason ?? a.declineReason ?? ''}</span> : '—') },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (a) => <StatusBadge status={a.status} />,
+    },
+    {
+      key: 'end',
+      header: 'Ended / reason',
+      render: (a) =>
+        a.endedAt || a.declinedAt ? (
+          <span className="text-xs">
+            {fmtDateTime(a.endedAt ?? a.declinedAt, tz)} — {a.endReason ?? a.declineReason ?? ''}
+          </span>
+        ) : (
+          '—'
+        ),
+    },
   ];
   const emailCols: Column<EmailRow>[] = [
-    { key: 'when', header: 'Queued', render: (e) => <span className="whitespace-nowrap">{fmtDateTime(e.createdAt, tz)}</span> },
+    {
+      key: 'when',
+      header: 'Queued',
+      render: (e) => <span className="whitespace-nowrap">{fmtDateTime(e.createdAt, tz)}</span>,
+    },
     { key: 'tpl', header: 'Template', render: (e) => humanize(e.template) },
-    { key: 'to', header: 'To', render: (e) => <span className="whitespace-nowrap">{e.to}</span> },
-    { key: 'status', header: 'Status', render: (e) => <StatusBadge status={e.status} /> },
-    { key: 'att', header: 'Attempts', render: (e) => e.attempts, className: 'text-center' },
-    { key: 'err', header: 'Last error', render: (e) => (e.lastError ? <span className="text-xs text-red-700">{e.lastError}</span> : '—') },
+    {
+      key: 'to',
+      header: 'To',
+      render: (e) => <span className="whitespace-nowrap">{e.to}</span>,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (e) => <StatusBadge status={e.status} />,
+    },
+    {
+      key: 'att',
+      header: 'Attempts',
+      render: (e) => e.attempts,
+      className: 'text-center',
+    },
+    {
+      key: 'err',
+      header: 'Last error',
+      render: (e) => (e.lastError ? <span className="text-xs text-red-700">{e.lastError}</span> : '—'),
+    },
   ];
 
   const def = action ? actions[action] : null;
@@ -356,17 +469,12 @@ export default function BookingDetail() {
                 </Button>
               </>
             )}
-            {b.status === 'IN_PROGRESS' && (
-              <Button variant="secondary" onClick={() => setAction('supportComplete')}>
-                Complete on driver&apos;s behalf
-              </Button>
-            )}
             {pinNeedsRegen && (
               <Button variant="secondary" onClick={() => setAction('regenPin')}>
                 Regenerate PIN
               </Button>
             )}
-            {isOpen && (
+            {isOpen && b.status !== 'IN_PROGRESS' && (
               <Button variant="secondary" onClick={() => setAction('delay')}>
                 Mark delayed
               </Button>
@@ -388,7 +496,8 @@ export default function BookingDetail() {
       <div className="space-y-4">
         {b.cancellationRequest?.status === 'PENDING' && isOpen && (
           <Alert tone="error" title="The employee has asked to cancel this ride">
-            “{b.cancellationRequest.reason}”{b.cancellationRequest.requestedAt ? ` · ${fmtDateTime(b.cancellationRequest.requestedAt, tz)}` : ''}. Approve to cancel the ride and release the driver, or decline to keep it booked.
+            “{b.cancellationRequest.reason}”{b.cancellationRequest.requestedAt ? ` · ${fmtDateTime(b.cancellationRequest.requestedAt, tz)}` : ''}. Approve to cancel the ride and
+            release the driver, or decline to keep it booked.
           </Alert>
         )}
         {b.flaggedForReview && (
@@ -401,7 +510,11 @@ export default function BookingDetail() {
             {b.delayReason ?? '—'}
           </Alert>
         )}
-        {b.status === 'REJECTED' && b.rejectionReason && <Alert tone="error" title="Rejected">{b.rejectionReason}</Alert>}
+        {b.status === 'REJECTED' && b.rejectionReason && (
+          <Alert tone="error" title="Rejected">
+            {b.rejectionReason}
+          </Alert>
+        )}
         {b.status === 'CANCELLED' && (
           <Alert tone="info" title={`Cancelled${b.cancelledByRole ? ` by ${humanize(b.cancelledByRole)}` : ''}${b.cancelledAt ? ` · ${fmtDateTime(b.cancelledAt, tz)}` : ''}`}>
             {b.cancellationReason ?? '—'}
@@ -417,7 +530,12 @@ export default function BookingDetail() {
                   'Destination',
                   <span key="d">
                     {b.dropLocation}
-                    <a href={mapsDirectionsUrl(b.dropLocation, b.pickupLocation)} target="_blank" rel="noopener noreferrer" className="ml-2 whitespace-nowrap text-sm font-medium text-indigo-600 hover:underline">
+                    <a
+                      href={mapsDirectionsUrl(b.dropLocation, b.pickupLocation)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-2 whitespace-nowrap text-sm font-medium text-indigo-600 hover:underline"
+                    >
                       Route in Google Maps ↗
                     </a>
                   </span>,
@@ -460,16 +578,37 @@ export default function BookingDetail() {
                 <DescriptionList
                   columns={1}
                   items={[
-                    ['Driver', current.driver ? <Link className="text-indigo-600 hover:underline" to={`/ops/drivers/${current.driver._id}`}>{current.driver.fullName} ({current.driver.driverCode})</Link> : '—'],
+                    [
+                      'Driver',
+                      current.driver ? (
+                        <Link className="text-indigo-600 hover:underline" to={`/ops/drivers/${current.driver._id}`}>
+                          {current.driver.fullName} ({current.driver.driverCode})
+                        </Link>
+                      ) : (
+                        '—'
+                      ),
+                    ],
                     ['Driver phone', current.driver?.phone ?? '—'],
-                    ['Vehicle', current.vehicle ? <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${current.vehicle._id}`}>{current.vehicle.registrationNumber}{current.vehicle.model ? ` · ${current.vehicle.model}` : ''} ({current.vehicle.capacity} seats)</Link> : '—'],
+                    [
+                      'Vehicle',
+                      current.vehicle ? (
+                        <Link className="text-indigo-600 hover:underline" to={`/ops/vehicles/${current.vehicle._id}`}>
+                          {current.vehicle.registrationNumber}
+                          {current.vehicle.model ? ` · ${current.vehicle.model}` : ''} ({current.vehicle.capacity} seats)
+                        </Link>
+                      ) : (
+                        '—'
+                      ),
+                    ],
                     ['Assigned by', `${current.assignedBy?.name ?? '—'} · ${fmtDateTime(current.createdAt, tz)}`],
                     ['Start method', current.startMethod ? (current.startMethod === 'OVERRIDE' ? `Support override — ${current.overrideReason ?? ''}` : 'Employee PIN') : '—'],
-                    ['Completed by', current.completionMethod ? (current.completionMethod === 'OVERRIDE' ? `Support override — ${current.completionOverrideReason ?? ''}` : 'Driver') : '—'],
+                    [
+                      'Completed by',
+                      current.completionMethod ? (current.completionMethod === 'OVERRIDE' ? `Support override — ${current.completionOverrideReason ?? ''}` : 'Driver') : '—',
+                    ],
                   ]}
                 />
                 <ol className="space-y-2" aria-label="Trip progress">
-                  <Step label="Acknowledged by driver" at={current.acknowledgedAt} tz={tz} />
                   <Step label="En route" at={current.enRouteAt} tz={tz} />
                   <Step label="Arrived at pickup" at={current.arrivedAt} tz={tz} />
                   <Step label="Trip started" at={current.startedAt} tz={tz} />
@@ -536,10 +675,12 @@ export default function BookingDetail() {
               </ol>
             )}
           </Card>
-          <Card title="Email notifications">
-            <p className="mb-3 text-xs text-slate-500">“Sent (accepted)” means the mail provider accepted the message; it is not proof of delivery.</p>
-            <DataTable columns={emailCols} rows={b.emails} rowKey={(e) => e._id} empty={<EmptyState title="No emails for this booking" />} />
-          </Card>
+          {isAdmin && (
+            <Card title="Email notifications">
+              <p className="mb-3 text-xs text-slate-500">“Sent (accepted)” means the mail provider accepted the message; it is not proof of delivery.</p>
+              <DataTable columns={emailCols} rows={b.emails} rowKey={(e) => e._id} empty={<EmptyState title="No emails for this booking" />} />
+            </Card>
+          )}
         </div>
       </div>
 

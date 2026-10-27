@@ -13,6 +13,7 @@ import { SYSTEM_ACTOR } from './audit.service.js';
 import { refreshDriverAvailability } from './availability.service.js';
 import { processOutboxBatch } from './email/outbox.worker.js';
 import { alertOperations } from './alert.service.js';
+import { cancelBookingInternal } from './booking.service.js';
 import { bookingEmailParams, broadcastBookingUpdate, notifyCoordinators, recordEvent } from './lifecycle.js';
 import { enqueueEmail, notifyInApp } from './notification.service.js';
 import { getPolicy } from './policy.service.js';
@@ -56,22 +57,6 @@ export async function detectLatePickups(now = new Date()) {
   return late.length;
 }
 
-/** Assignments the driver has not acknowledged within the policy timeout. */
-export async function detectUnacknowledged(now = new Date()) {
-  const policy = await getPolicy();
-  const timeout = policy.assignment?.acknowledgementTimeoutMinutes ?? 30;
-  const stale = await CabAssignment.find({ status: 'ACTIVE', acknowledgedAt: null, unacknowledgedAlertedAt: null, createdAt: { $lt: addMinutes(now, -timeout) } })
-    .populate('driver', 'fullName lastSeenAt')
-    .limit(200);
-  for (const a of stale) {
-    const claimed = await CabAssignment.updateOne({ _id: a._id, unacknowledgedAlertedAt: null }, { $set: { unacknowledgedAlertedAt: now } });
-    if (!claimed.modifiedCount) continue;
-    const driver = a.driver as unknown as { fullName: string; lastSeenAt?: Date };
-    await notifyCoordinators(null, a.officeLocation, { type: 'UNACKNOWLEDGED_ASSIGNMENT', title: 'Assignment not acknowledged', body: `${a.bookingReference}: ${driver.fullName} has not acknowledged`, data: { bookingId: String(a.booking) }, idempotencyKey: `unack:${a._id}` });
-  }
-  return stale.length;
-}
-
 export async function detectOverdueTrips(now = new Date()) {
   const policy = await getPolicy();
   const limit = policy.exceptions?.overdueTripMinutes ?? 180;
@@ -80,6 +65,39 @@ export async function detectOverdueTrips(now = new Date()) {
     await notifyCoordinators(null, a.officeLocation, { type: 'OVERDUE_TRIP', title: 'Overdue trip', body: `${a.bookingReference} has not been completed`, data: { bookingId: String(a.booking) }, idempotencyKey: `overdue:${a._id}` });
   }
   return overdue.length;
+}
+
+/** Rides not started this long after their pickup time are cancelled automatically. */
+export const AUTO_CANCEL_AFTER_HOURS = 3;
+
+/**
+ * Rides still waiting, assigned, or with the driver on the way / at the pickup 3 hours after their
+ * pickup time: nobody responded (employee or driver), so they are cancelled and everyone is told.
+ */
+export async function autoCancelStale(now = new Date()) {
+  const stale = await CabRequest.find({
+    status: { $in: ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'] },
+    scheduledPickupAt: { $lt: addMinutes(now, -AUTO_CANCEL_AFTER_HOURS * 60) },
+  })
+    .select('_id reference')
+    .limit(100)
+    .lean();
+  let cancelled = 0;
+  for (const b of stale) {
+    try {
+      await cancelBookingInternal(
+        SYSTEM_ACTOR,
+        b._id,
+        `Cancelled automatically: no response from the employee or driver within ${AUTO_CANCEL_AFTER_HOURS} hours of the pickup time`,
+        ['REQUESTED', 'PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'],
+      );
+      cancelled++;
+    } catch (err) {
+      logger.warn({ err, reference: b.reference }, 'Automatic cancellation skipped');
+    }
+  }
+  if (cancelled) logger.info({ cancelled }, 'Stale rides cancelled automatically');
+  return cancelled;
 }
 
 export async function expirePins(now = new Date()) {
@@ -174,9 +192,9 @@ export async function sendDailyBookingReminders(now: Date) {
 
 export async function runMonitorsOnce() {
   const now = new Date();
+  await autoCancelStale(now);
   await expirePins(now);
   await detectLatePickups(now);
-  await detectUnacknowledged(now);
   await detectOverdueTrips(now);
   await refreshAvailabilities();
   await sendDailyBookingReminders(now);

@@ -31,12 +31,6 @@ const ic = 'h-4 w-4';
 type Tab = { to: string; label: string };
 const SECTION_TABS: Array<{ roles: Role[]; tabs: Tab[] }> = [
   {
-    roles: ['ADMIN'],
-    tabs: [
-      { to: '/admin/employees', label: 'All employees' },
-    ],
-  },
-  {
     roles: ['ADMIN', 'COORDINATOR'],
     tabs: [
       { to: '/ops/drivers', label: 'Drivers' },

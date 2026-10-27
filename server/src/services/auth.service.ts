@@ -45,6 +45,8 @@ export function adminsUseMicrosoft() {
 /** Drivers sign in only with their mobile number and vehicle number; employees possibly only with Microsoft. */
 function usesPassword(role: string) {
   if (role === 'DRIVER' || role === 'COORDINATOR') return false;
+  // With Microsoft sign-in configured, admins use it too; passwords stay only as the fallback without it.
+  if (role === 'ADMIN') return !adminsUseMicrosoft();
   return !(role === 'EMPLOYEE' && employeesUseMicrosoftOnly());
 }
 

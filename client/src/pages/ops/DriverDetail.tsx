@@ -227,7 +227,6 @@ export default function DriverDetail() {
     { key: 'veh', header: 'Vehicle', render: (a) => a.vehicle?.registrationNumber ?? '—' },
     { key: 'asg', header: 'Assignment', render: (a) => <StatusBadge status={a.status} /> },
     { key: 'bst', header: 'Booking status', render: (a) => <StatusBadge status={a.booking?.status} /> },
-    { key: 'ack', header: 'Ack', render: (a) => (a.acknowledgedAt ? fmtDateTime(a.acknowledgedAt) : '—') },
     { key: 'start', header: 'Start', render: (a) => (a.startMethod ? humanize(a.startMethod) : '—') },
   ];
   const linkCols: Column<DriverDetailData['links'][number]>[] = [

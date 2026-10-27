@@ -63,6 +63,36 @@ describe('company shifts: one cab per shift, 8 PM - 6 AM', () => {
     expect(none.body.error.code).toBe('NO_CAB_FOR_SHIFT');
   });
 
+  it('employees can change their ride until a cab is assigned, under the same rules', async () => {
+    await useCompanyShifts();
+    const { makeCoordinator, makeDriver } = await import('./helpers.js');
+    const emp = await makeEmployee();
+    await emp.employee.updateOne({ $set: { homeAddress: 'Flat 3, Madhapur, Hyderabad' } });
+    const req = (d: number, o: Record<string, unknown>) => {
+      const { pickupLocation: _p, dropLocation: _d, ...rest } = bookingInput({ travelDate: futureDate(d), ...o });
+      return rest;
+    };
+    const ride = (await emp.client!.post('/api/me/bookings', req(2, { shift: '9PM-6AM' })).expect(201)).body.booking;
+    expect((await emp.client!.get(`/api/me/bookings/${ride._id}`)).body.canEdit).toBe(true);
+
+    // 9 PM IN → 7 PM - 4 AM OUT: everything is worked out again
+    const { clientRequestId: _c, ...change } = req(2, { shift: '7PM-4AM' });
+    const changed = await emp.client!.patch(`/api/me/bookings/${ride._id}`, change).expect(200);
+    expect(changed.body).toMatchObject({ direction: 'OUT', pickupTime: '04:00', travelDate: nextDay(futureDate(2)), pickupTimeSet: true });
+    expect(changed.body.pickupLocation).toMatch(/Hyderabad HQ/);
+
+    // moving it onto a day that already has a cab is refused
+    await emp.client!.post('/api/me/bookings', req(3, { shift: '9PM-6AM' })).expect(201);
+    const { clientRequestId: _c2, ...toTaken } = req(3, { shift: '7PM-4AM' });
+    expect((await emp.client!.patch(`/api/me/bookings/${ride._id}`, toTaken)).body.error.code).toBe('SHIFT_DAY_BOOKED');
+
+    // once a cab is assigned it can't be changed
+    const coord = await makeCoordinator(['HYD']);
+    const drv = await makeDriver({ capacity: 4 });
+    await coord.client.post('/api/ops/trips', { bookingIds: [ride._id], driverId: drv.driver._id, vehicleId: drv.vehicle._id }).expect(201);
+    expect((await emp.client!.patch(`/api/me/bookings/${ride._id}`, change)).body.error.code).toBe('EDIT_NOT_ALLOWED');
+  });
+
   it('IN rides: the coordinator sets the pickup time when assigning, before the reach-office time', async () => {
     await useCompanyShifts();
     const { makeCoordinator, makeDriver } = await import('./helpers.js');

@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, CheckCircle2, MapPin, Navigation, PlayCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, KeyRound, MapPin, Navigation, PlayCircle } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
+import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, Modal, Select, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
 import { ApiError, errorMessage, get, post } from '../../lib/api';
-import { fmt12h, fmtDateTime, fmtTime, fmtTravelDate, mapsDirectionsUrl } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtTravelDate, mapsDirectionsUrl } from '../../lib/format';
 
 type Ride = {
   assignmentId: string;
@@ -35,51 +35,10 @@ type Ride = {
   driverNotes?: string;
 };
 
-const STEPS = [
-  { key: 'ASSIGNED', label: 'Assigned', at: (r: Ride) => r.acknowledgedAt },
-  { key: 'DRIVER_EN_ROUTE', label: 'En route', at: (r: Ride) => r.enRouteAt },
-  { key: 'ARRIVED', label: 'Arrived', at: (r: Ride) => r.arrivedAt },
-  { key: 'IN_PROGRESS', label: 'In progress', at: (r: Ride) => r.startedAt },
-  { key: 'COMPLETED', label: 'Completed', at: (r: Ride) => r.completedAt },
-] as const;
-
-function Stepper({ ride, tz }: { ride: Ride; tz?: string }) {
-  const status = ride.assignmentStatus === 'COMPLETED' ? 'COMPLETED' : ride.booking?.status ?? 'ASSIGNED';
-  const current = Math.max(0, STEPS.findIndex((s) => s.key === status));
-  const ended = ride.assignmentStatus !== 'ACTIVE' && ride.assignmentStatus !== 'COMPLETED';
-  return (
-    <ol className="flex items-start justify-between gap-1" aria-label="Trip progress">
-      {STEPS.map((s, i) => {
-        const done = i < current || (i === current && status === 'COMPLETED');
-        const isCurrent = i === current && !done && !ended;
-        const at = s.at(ride);
-        return (
-          <li key={s.key} className="flex min-w-0 flex-1 flex-col items-center text-center" aria-current={isCurrent ? 'step' : undefined}>
-            <div className="flex w-full items-center">
-              <span className={cn('h-0.5 flex-1', i === 0 ? 'bg-transparent' : i <= current ? 'bg-emerald-500' : 'bg-slate-200')} aria-hidden />
-              <span
-                className={cn(
-                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold',
-                  done ? 'border-emerald-500 bg-emerald-500 text-white' : isCurrent ? 'border-slate-900 bg-white text-slate-900' : 'border-slate-200 bg-white text-slate-400',
-                )}
-              >
-                {done ? <Check className="h-4 w-4" aria-hidden /> : i + 1}
-              </span>
-              <span className={cn('h-0.5 flex-1', i === STEPS.length - 1 ? 'bg-transparent' : i < current ? 'bg-emerald-500' : 'bg-slate-200')} aria-hidden />
-            </div>
-            <span className={cn('mt-1 text-[11px] font-medium leading-tight sm:text-xs', isCurrent ? 'text-slate-900' : 'text-slate-500')}>{s.label}</span>
-            {at && <span className="text-[10px] text-slate-400">{fmtTime(at, tz)}</span>}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
 type PinMsg = { tone: 'error' | 'warn' | 'success'; title: string; text: string } | null;
 
 function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () => void; onNotActive: (msg: string) => void }) {
-  const [pin, setPin] = useState('');
+  const [typed, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<PinMsg>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -94,8 +53,8 @@ function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () 
   const preBlocked = pinState === 'LOCKED' ? 'locked' : pinState === 'EXPIRED' ? 'expired' : pinState === 'REVOKED' ? 'revoked' : null;
   const lockedOut = blocked ?? preBlocked;
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const submit = async (e?: FormEvent, pin = typed) => {
+    e?.preventDefault();
     if (busy || lockedOut) return;
     if (!/^\d{4,6}$/.test(pin)) {
       setMsg({ tone: 'error', title: 'Check the PIN', text: 'Enter the numeric PIN the passenger tells you.' });
@@ -138,11 +97,12 @@ function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () 
   };
 
   return (
-    <section className="rounded-xl border-2 border-violet-300 bg-violet-50 p-4" aria-labelledby="pin-heading">
-      <h2 id="pin-heading" className="text-lg font-semibold text-slate-900">
-        Verify the passenger's PIN
+    <section className="rounded-xl border-2 border-violet-300 bg-violet-50 p-5 text-center" aria-labelledby="pin-heading">
+      <KeyRound className="mx-auto h-8 w-8 text-violet-600" aria-hidden />
+      <h2 id="pin-heading" className="mt-2 text-xl font-semibold text-slate-900">
+        Enter the passenger&apos;s PIN
       </h2>
-      <p className="mt-1 text-sm text-slate-700">Once the passenger is inside the vehicle, ask them to tell you their ride-start PIN and type it below.</p>
+      <p className="mt-1 text-sm text-slate-700">Ask the passenger for their 4-digit PIN once they are in the cab.</p>
       <div aria-live="assertive" aria-atomic="true" className="mt-3 space-y-2 empty:hidden">
         {lockedOut && (
           <Alert tone="error" title={lockedOut === 'locked' ? 'PIN locked' : lockedOut === 'expired' ? 'PIN expired' : 'PIN no longer valid'}>
@@ -156,30 +116,50 @@ function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () 
         )}
       </div>
       {!lockedOut && (
-        <form onSubmit={submit} className="mt-3 space-y-3">
-          <label htmlFor="ride-pin" className="block text-sm font-medium text-slate-800">
+        <form onSubmit={submit} className="mt-4 space-y-3">
+          <label htmlFor="ride-pin" className="sr-only">
             Passenger PIN
           </label>
-          <input
-            ref={inputRef}
-            id="ride-pin"
-            name="pin"
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            pattern="[0-9]*"
-            maxLength={4}
-            value={pin}
-            onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-            className="block h-16 w-full rounded-xl border-2 border-slate-300 bg-white text-center font-mono text-3xl tracking-[0.5em] focus:border-violet-500"
-            aria-describedby="pin-attempts"
-            disabled={busy}
-          />
-          <p id="pin-attempts" className="text-sm text-slate-600">
-            {remaining !== null ? `${remaining} attempt${remaining === 1 ? '' : 's'} remaining` : ' '}
+          {/* One real input under four digit boxes: tapping anywhere opens the number pad. */}
+          <div className="relative mx-auto flex w-fit gap-3" onClick={() => inputRef.current?.focus()}>
+            {[0, 1, 2, 3].map((i) => (
+              <span
+                key={i}
+                className={cn(
+                  'flex h-16 w-14 items-center justify-center rounded-xl border-2 bg-white font-mono text-3xl font-semibold text-slate-900',
+                  i === typed.length && !busy ? 'border-violet-500 ring-2 ring-violet-200' : typed[i] ? 'border-violet-300' : 'border-slate-300',
+                )}
+                aria-hidden
+              >
+                {typed[i] ?? ''}
+              </span>
+            ))}
+            <input
+              ref={inputRef}
+              id="ride-pin"
+              name="pin"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              pattern="[0-9]*"
+              maxLength={4}
+              value={typed}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, '').slice(0, 4);
+                setPin(v);
+                if (v.length === 4) void submit(undefined, v);
+              }}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              aria-describedby="pin-attempts"
+              disabled={busy}
+            />
+          </div>
+          <p id="pin-attempts" className="min-h-5 text-sm text-slate-600">
+            {remaining !== null ? `${remaining} attempt${remaining === 1 ? '' : 's'} left` : ''}
           </p>
-          <Button type="submit" size="xl" variant="success" loading={busy} disabled={busy || pin.length < 4} icon={<PlayCircle className="h-6 w-6" aria-hidden />}>
-            Verify PIN & start trip
+          <Button type="submit" size="xl" variant="success" loading={busy} disabled={busy || typed.length < 4} icon={<PlayCircle className="h-6 w-6" aria-hidden />}>
+            Verify PIN &amp; start ride
           </Button>
         </form>
       )}
@@ -195,7 +175,7 @@ export default function DriverRide() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notActive, setNotActive] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<'noshow' | 'complete' | null>(null);
+  const [dialog, setDialog] = useState<'cancel' | 'complete' | null>(null);
   const [note, setNote] = useState('');
   const [noteDirty, setNoteDirty] = useState(false);
   const [noteBusy, setNoteBusy] = useState(false);
@@ -297,23 +277,50 @@ export default function DriverRide() {
   const status = b?.status;
   const terminal = !isActive || !status || ['COMPLETED', 'CANCELLED', 'NO_SHOW', 'REJECTED'].includes(status);
 
+  // Drivers may cancel only because of the employee (not coming, didn't show up, other); for their
+  // own reasons they call the coordinator, who changes the cab.
+  const cancelButton = (
+    <div className="space-y-1 text-center">
+      <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setDialog('cancel')}>
+        Cancel ride
+      </Button>
+      <p className="text-xs text-slate-500">Only if the passenger isn&apos;t coming. Can&apos;t make it yourself? Call your transport coordinator.</p>
+    </div>
+  );
+
+  const navigateTo = (place: string, label: string) => (
+    <a
+      href={mapsDirectionsUrl(place)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white text-lg font-semibold text-indigo-700 shadow-xs active:bg-slate-50"
+    >
+      <MapPin className="h-5 w-5" aria-hidden />
+      {label}
+    </a>
+  );
+
+  // One step at a time: start the trip → (navigate, arrived) → PIN → (navigate to drop, complete).
   let primary: ReactNode = null;
-  if (!terminal) {
+  if (!terminal && b) {
     if (status === 'ASSIGNED') {
       primary = (
         <div className="space-y-3">
-          <Button size="xl" loading={busy} onClick={() => run('en-route', 'On your way — the passenger has been notified')} icon={<Navigation className="h-6 w-6" aria-hidden />}>
-            Start driving to pickup
+          <Button size="xl" loading={busy} onClick={() => run('en-route', 'Trip started — the passenger has been notified')} icon={<Navigation className="h-6 w-6" aria-hidden />}>
+            Start the trip
           </Button>
-          {/* Drivers can't cancel or hand back a ride; the coordinator changes the cab if needed. */}
-          <p className="text-center text-sm text-slate-500">Can&apos;t make this ride? Call your transport coordinator.</p>
+          {cancelButton}
         </div>
       );
     } else if (status === 'DRIVER_EN_ROUTE') {
       primary = (
-        <Button size="xl" loading={busy} onClick={() => run('arrived', 'Arrival recorded — the passenger has been notified')} icon={<MapPin className="h-6 w-6" aria-hidden />}>
-          I have arrived at pickup
-        </Button>
+        <div className="space-y-3">
+          {navigateTo(b.pickupLocation, 'Navigate to pickup')}
+          <Button size="xl" loading={busy} onClick={() => run('arrived', 'Arrival recorded — the passenger has been notified')} icon={<MapPin className="h-6 w-6" aria-hidden />}>
+            I have arrived
+          </Button>
+          {cancelButton}
+        </div>
       );
     } else if (status === 'ARRIVED') {
       primary = (
@@ -329,16 +336,17 @@ export default function DriverRide() {
               refresh();
             }}
           />
-          <Button size="lg" variant="secondary" className="w-full" onClick={() => setDialog('noshow')}>
-            Passenger did not show up
-          </Button>
+          {cancelButton}
         </div>
       );
     } else if (status === 'IN_PROGRESS') {
       primary = (
-        <Button size="xl" variant="success" onClick={() => setDialog('complete')} icon={<CheckCircle2 className="h-6 w-6" aria-hidden />}>
-          Complete trip
-        </Button>
+        <div className="space-y-3">
+          {navigateTo(b.dropLocation, 'Navigate to drop')}
+          <Button size="xl" variant="success" onClick={() => setDialog('complete')} icon={<CheckCircle2 className="h-6 w-6" aria-hidden />}>
+            Complete trip
+          </Button>
+        </div>
       );
     }
   }
@@ -358,9 +366,6 @@ export default function DriverRide() {
             {ride.assignmentStatus === 'ACTIVE' ? <StatusBadge status={status} /> : <StatusBadge status={ride.assignmentStatus} />}
             {b?.isDelayed && <StatusBadge status="DELAYED" />}
           </div>
-        </div>
-        <div className="mt-4">
-          <Stepper ride={ride} tz={tz} />
         </div>
       </section>
 
@@ -382,19 +387,6 @@ export default function DriverRide() {
       {b?.isDelayed && isActive && <Alert tone="warn">This ride has been flagged as delayed by the transport team.</Alert>}
 
       {primary && <div>{primary}</div>}
-
-      {/* Navigation: to the pickup until the passenger is in the cab, then to the drop-off */}
-      {!terminal && b && (
-        <a
-          href={['ARRIVED', 'IN_PROGRESS'].includes(status ?? '') ? mapsDirectionsUrl(b.dropLocation) : mapsDirectionsUrl(b.pickupLocation)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white text-lg font-semibold text-indigo-700 shadow-xs active:bg-slate-50"
-        >
-          <MapPin className="h-5 w-5" aria-hidden />
-          {['ARRIVED', 'IN_PROGRESS'].includes(status ?? '') ? 'Navigate to drop-off' : 'Navigate to pickup'}
-        </a>
-      )}
 
       {terminal && (
         <Card title="Ride summary">
@@ -451,14 +443,13 @@ export default function DriverRide() {
         </div>
       </Card>
 
-      <ConfirmDialog
-        open={dialog === 'noshow'}
+      <DriverCancelDialog
+        open={dialog === 'cancel'}
+        arrived={status === 'ARRIVED'}
         onClose={() => setDialog(null)}
-        onConfirm={(reason) => confirmAction('no-show', 'Ride closed as no-show', { reason }).then(() => refetch())}
-        title="Passenger did not show up?"
-        message="Only do this after waiting at the pickup point. If you need to reach the passenger, call the transport coordinator. The coordinator will be informed."
-        confirmLabel="Mark as no-show"
-        reasonLabel="What happened?"
+        onConfirm={(reason, note) =>
+          confirmAction('cancel', reason === 'NO_SHOW' ? 'Ride closed as no-show' : 'Ride cancelled — the coordinator is informed', { reason, ...(note ? { note } : {}) }).then(() => refetch())
+        }
       />
       <ConfirmDialog
         open={dialog === 'complete'}
@@ -472,5 +463,76 @@ export default function DriverRide() {
         reasonMinLength={0}
       />
     </div>
+  );
+}
+
+type DriverCancelReason = 'NOT_COMING' | 'NO_SHOW' | 'OTHER';
+
+/**
+ * Driver cancels because of the passenger. "Didn't show up" is only offered at the pickup (after
+ * "Arrived") and is recorded as a no-show; "Other" needs a reason. The coordinator is informed.
+ */
+function DriverCancelDialog({ open, arrived, onClose, onConfirm }: { open: boolean; arrived: boolean; onClose: () => void; onConfirm: (reason: DriverCancelReason, note: string) => Promise<unknown> }) {
+  const [reason, setReason] = useState<DriverCancelReason | ''>('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setReason('');
+      setNote('');
+      setError('');
+    }
+  }, [open]);
+  const submit = async () => {
+    if (!reason) return setError('Choose a reason');
+    if (reason === 'OTHER' && note.trim().length < 3) return setError('Say why the ride is cancelled');
+    setBusy(true);
+    setError('');
+    try {
+      await onConfirm(reason, note.trim());
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={busy ? () => undefined : onClose}
+      title="Cancel this ride?"
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Keep ride
+          </Button>
+          <Button variant="danger" onClick={submit} loading={busy} disabled={!reason}>
+            Cancel ride
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Select label="Reason" required value={reason} onChange={(e) => setReason(e.target.value as DriverCancelReason)}>
+          <option value="">Choose a reason…</option>
+          <option value="NOT_COMING">Passenger said they&apos;re not coming</option>
+          {arrived && <option value="NO_SHOW">Passenger didn&apos;t show up</option>}
+          <option value="OTHER">Other</option>
+        </Select>
+        {!arrived && <p className="text-xs text-slate-500">&quot;Passenger didn&apos;t show up&quot; is available once you tap &quot;I have arrived at pickup&quot;.</p>}
+        <Textarea
+          label={reason === 'OTHER' ? 'What happened?' : 'Details (optional)'}
+          required={reason === 'OTHER'}
+          maxLength={300}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+        <p className="text-xs text-slate-500">The passenger and the transport coordinator are informed.</p>
+        {error && <Alert tone="error">{error}</Alert>}
+      </div>
+    </Modal>
   );
 }

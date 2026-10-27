@@ -1,9 +1,9 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DateTime } from 'luxon';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Card, ErrorState, Input, PageHeader, Select, Spinner, cn, useToast } from '../../components/ui';
-import { ApiError, errorMessage, post } from '../../lib/api';
+import { ApiError, errorMessage, get, patch, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { addDaysISO, fmtTravelDate, todayISO, uuid } from '../../lib/format';
 import { fieldErrors } from '../../lib/hooks';
@@ -94,15 +94,36 @@ export default function RequestCab() {
   };
   const usualTimes = !!selectedShift && form.shiftStart === selectedShift.startTime && form.shiftEnd === selectedShift.endTime;
 
+  // Changing an existing ride (?edit=<id>, only while no cab is assigned): the form starts from it.
+  const [params] = useSearchParams();
+  const editId = params.get('edit') ?? '';
+  const editing = useQuery({
+    queryKey: ['my-bookings', 'detail', editId],
+    queryFn: () => get<{ _id: string; reference: string; canEdit: boolean; shift?: string; shiftDate?: string; travelDate: string; shiftStart?: string; shiftEnd?: string; direction?: 'IN' | 'OUT'; pickupTime: string }>(`/me/bookings/${editId}`),
+    enabled: !!editId,
+  });
+  const ride = editing.data;
+
   // The shift saved on the employee's account is pre-selected; changing it here does not change the account.
   const savedShift = (me?.profile as { defaultShift?: string } | undefined)?.defaultShift ?? '';
   const prefilled = useRef(false);
   useEffect(() => {
-    if (prefilled.current || !policy) return;
+    if (prefilled.current || !policy || (editId && !ride)) return;
     prefilled.current = true;
+    if (ride) {
+      setForm({
+        travelDate: ride.shiftDate ?? ride.travelDate,
+        shift: ride.shift ?? '',
+        shiftStart: ride.shiftStart ?? '',
+        shiftEnd: ride.shiftEnd ?? '',
+        direction: ride.direction ?? '',
+        pickupTime: ride.pickupTime,
+      });
+      return;
+    }
     if (activeShifts.some((s) => s.code === savedShift)) onShift(savedShift);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [policy, savedShift]);
+  }, [policy, savedShift, ride, editId]);
 
   const validate = (): Partial<Record<keyof Form, string>> => {
     const e: Partial<Record<keyof Form, string>> = {};
@@ -147,14 +168,22 @@ export default function RequestCab() {
       return;
     }
     setSubmitting(true);
+    const details = {
+      travelDate,
+      shift: form.shift || undefined,
+      ...(hasHours ? { shiftStart: form.shiftStart, shiftEnd: form.shiftEnd, ...(both && direction ? { direction } : {}) } : { pickupTime: form.pickupTime }),
+      officeLocation: myOffice,
+    };
     try {
-      const res = await post<CreateResult>('/me/bookings', {
-        travelDate,
-        shift: form.shift || undefined,
-        ...(hasHours ? { shiftStart: form.shiftStart, shiftEnd: form.shiftEnd, ...(both && direction ? { direction } : {}) } : { pickupTime: form.pickupTime }),
-        officeLocation: myOffice,
-        clientRequestId: requestId.current,
-      });
+      if (ride) {
+        await patch(`/me/bookings/${ride._id}`, details);
+        qc.invalidateQueries({ queryKey: ['my-bookings'] });
+        qc.invalidateQueries({ queryKey: ['employee-home'] });
+        toast.success(`Ride updated · ${ride.reference}`, 'The transport team is told about the change.');
+        navigate(`/employee/bookings/${ride._id}`);
+        return;
+      }
+      const res = await post<CreateResult>('/me/bookings', { ...details, clientRequestId: requestId.current });
       requestId.current = uuid();
       qc.invalidateQueries({ queryKey: ['my-bookings'] });
       qc.invalidateQueries({ queryKey: ['employee-home'] });
@@ -192,14 +221,32 @@ export default function RequestCab() {
     }
   };
 
-  if (policyQ.isLoading) return <Spinner />;
+  if (policyQ.isLoading || (editId && editing.isLoading)) return <Spinner />;
   if (policyQ.error || !policy) return <ErrorState error={policyQ.error} onRetry={policyQ.refetch} />;
+  if (editId && (editing.error || !ride)) return <ErrorState error={editing.error ?? new Error('Ride not found')} onRetry={editing.refetch} />;
+  if (ride && !ride.canEdit) {
+    return (
+      <>
+        <PageHeader title="Change your ride" subtitle={<Link to={`/employee/bookings/${ride._id}`} className="text-indigo-700 hover:underline">← Back to the ride</Link>} />
+        <Alert tone="info" title="This ride can no longer be changed">
+          A cab is already assigned. You can cancel it from the ride, or ask the admin.
+        </Alert>
+      </>
+    );
+  }
   const rules = policy.booking;
   const inFrom = winStart ? addMinutesHHmm(winStart, IN_LEAD_MINUTES) : '';
 
   return (
     <>
-      <PageHeader title="Request a cab" subtitle={<Link to="/employee" className="text-indigo-700 hover:underline">← Back to home</Link>} />
+      <PageHeader
+        title={ride ? `Change your ride · ${ride.reference}` : 'Request a cab'}
+        subtitle={
+          <Link to={ride ? `/employee/bookings/${ride._id}` : '/employee'} className="text-indigo-700 hover:underline">
+            {ride ? '← Back to the ride' : '← Back to home'}
+          </Link>
+        }
+      />
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <form onSubmit={submit} noValidate className="space-y-4">
@@ -317,9 +364,9 @@ export default function RequestCab() {
             </p>
             <div className="flex flex-wrap gap-2 pt-2">
               <Button type="submit" size="lg" loading={submitting} disabled={submitting || (hasHours && timesOk && !direction)}>
-                Submit request
+                {ride ? 'Save changes' : 'Submit request'}
               </Button>
-              <Button variant="ghost" size="lg" onClick={() => navigate('/employee')} disabled={submitting}>
+              <Button variant="ghost" size="lg" onClick={() => navigate(ride ? `/employee/bookings/${ride._id}` : '/employee')} disabled={submitting}>
                 Cancel
               </Button>
             </div>
@@ -341,8 +388,7 @@ export default function RequestCab() {
               <li>One cab per shift day.</li>
               <li>Book at least {minutesLabel(rules.minLeadMinutes)} ahead.</li>
               {rules.dailyCutoffTime && <li>Bookings for a day close at {fmt12h(rules.dailyCutoffTime)} on the previous day.</li>}
-              <li>You can book up to {rules.maxDaysAhead} days in advance.</li>
-              <li>You can cancel yourself until a cab is assigned; after that, send a cancellation request to the admin from the booking.</li>
+              <li>You can change or cancel your ride yourself until a cab is assigned; after that, send a cancellation request to the admin from the booking.</li>
               {rules.approvalRequired && <li>Requests need approval before a cab is assigned.</li>}
             </ul>
           </Alert>

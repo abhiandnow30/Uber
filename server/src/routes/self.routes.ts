@@ -5,11 +5,23 @@ import { body, objectId, pinLimiter, query } from '../middleware/common.js';
 import { CabRequest } from '../models/booking.js';
 import { Employee } from '../models/Employee.js';
 import { Notification } from '../models/system.js';
-import { cancelMyBooking, createBooking, createBookingSchema, getMyBooking, hasCabForCurrentWorkDay, listMyBookings, requestCancellation } from '../services/booking.service.js';
+import {
+  cancelMyBooking,
+  createBooking,
+  createBookingSchema,
+  getMyBooking,
+  hasCabForCurrentWorkDay,
+  listMyBookings,
+  requestCancellation,
+  updateBookingSchema,
+  updateMyBooking,
+} from '../services/booking.service.js';
 import {
   acknowledge,
   addDriverNote,
   completeTrip,
+  driverCancel,
+  driverCancelSchema,
   driverHome,
   driverRide,
   driverRideHistory,
@@ -71,6 +83,10 @@ employeeRouter.get('/bookings/:id', async (req, res) => {
   res.json(await getMyBooking(actorFromRequest(req), String(req.params.id)));
 });
 
+// Change a ride while no cab is assigned (same rules as a new request).
+employeeRouter.patch('/bookings/:id', async (req, res) => {
+  res.json(await updateMyBooking(actorFromRequest(req), String(req.params.id), body(updateBookingSchema, req)));
+});
 employeeRouter.post('/bookings/:id/cancel', async (req, res) => {
   const input = body(z.object({ reason: z.string().trim().min(3).max(500) }), req);
   res.json(await cancelMyBooking(actorFromRequest(req), String(req.params.id), input.reason));
@@ -103,9 +119,13 @@ driverRouter.post('/duty', async (req, res) => {
 driverRouter.post('/rides/:id/acknowledge', async (req, res) => {
   res.json(await acknowledge(actorFromRequest(req), objectId(req.params.id, 'Ride')));
 });
-// Drivers can't cancel or hand back a ride: they call the coordinator, who changes the cab.
+// Drivers can't hand back a ride for their own reasons: they call the coordinator, who changes the cab.
 driverRouter.post('/rides/:id/decline', () => {
   throw new AppError(403, 'DRIVER_CANNOT_CANCEL', "Drivers can't cancel a ride. Please call your transport coordinator.");
+});
+// …but they may cancel because of the employee (no-show, not coming, other).
+driverRouter.post('/rides/:id/cancel', async (req, res) => {
+  res.json(await driverCancel(actorFromRequest(req), objectId(req.params.id, 'Ride'), body(driverCancelSchema, req)));
 });
 driverRouter.post('/rides/:id/en-route', async (req, res) => {
   await markEnRoute(actorFromRequest(req), objectId(req.params.id, 'Ride'));

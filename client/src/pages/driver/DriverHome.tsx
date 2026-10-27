@@ -1,9 +1,9 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, Bell, Car, ChevronRight, History } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Alert, Button, Card, EmptyState, ErrorState, Spinner } from '../../components/ui';
-import { get, post } from '../../lib/api';
+import { get } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 
 type Vehicle = { registrationNumber?: string; model?: string; capacity?: number; status?: string } | null;
@@ -95,7 +95,6 @@ function RideCard({ r }: { r: RideView }) {
 }
 
 export default function DriverHome() {
-  const qc = useQueryClient();
   const navigate = useNavigate();
   const [showAll, setShowAll] = useState(false);
   const { data, isLoading, error, refetch, dataUpdatedAt } = useQuery({
@@ -103,16 +102,6 @@ export default function DriverHome() {
     queryFn: () => get<DriverHomeData>('/driver/home'),
     refetchInterval: 30_000,
   });
-
-  // There is no confirm step for drivers: a ride shown here counts as seen, so the
-  // coordinator's "not acknowledged" alert only fires for drivers who never open the app.
-  const acked = useRef(new Set<string>());
-  useEffect(() => {
-    const unseen = [...(data?.today ?? []), ...(data?.upcoming ?? [])].filter((r) => r.assignmentStatus === 'ACTIVE' && !r.acknowledgedAt && !acked.current.has(r.assignmentId));
-    if (!unseen.length) return;
-    unseen.forEach((r) => acked.current.add(r.assignmentId));
-    Promise.allSettled(unseen.map((r) => post(`/driver/rides/${r.assignmentId}/acknowledge`, {}))).then(() => qc.invalidateQueries({ queryKey: ['driver'] }));
-  }, [data, qc]);
 
   if (isLoading) return <Spinner />;
   if (error || !data) return <ErrorState error={error} onRetry={refetch} />;

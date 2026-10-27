@@ -75,6 +75,9 @@ export async function syncIndexes() {
     logger.info('Bookings marked IN (to office) / OUT (to home)');
   }
 
+  // Drivers no longer accept rides (assigned means theirs): mark older open assignments accepted.
+  await mongoose.connection.db!.collection('cabassignments').updateMany({ status: 'ACTIVE', acknowledgedAt: null }, [{ $set: { acknowledgedAt: '$createdAt' } }]);
+
   // Drivers saved before mobile sign-in existed have no phoneKey yet.
   const drivers = mongoose.model('Driver');
   for (const d of await drivers.find({ phoneKey: { $exists: false } }, { phone: 1 }).lean<Array<{ _id: unknown; phone?: string }>>()) {
