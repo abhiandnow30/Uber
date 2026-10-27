@@ -78,6 +78,11 @@ services:
 networks:
   net:
     name: neutara-cabs-booking-net
+    # Fixed small range: the server's Docker has no free automatic ranges left.
+    # Override with NEUTARA_SUBNET=<cidr> in a .env file next to this file if it clashes.
+    ipam:
+      config:
+        - subnet: ${NEUTARA_SUBNET:-10.207.97.0/28}
 
 volumes:
   mongo-data:
