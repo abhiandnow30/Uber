@@ -1,12 +1,13 @@
-# Server stack: MongoDB single-node replica set + the app.
+# Server stack: frontend (nginx) + backend API + MongoDB single-node replica set.
 # Transactions require a replica set, so mongo starts with --replSet and is
 # initiated by the healthcheck.
 #
-# Nothing is exposed to the network:
-#  - MongoDB has no published port and sits on an internal-only network.
-#  - The app is published on 127.0.0.1:4000 only (this machine). Put a reverse
-#    proxy with HTTPS (nginx, Caddy, IIS…) on the host in front of it if other
-#    devices need access.
+# Ports (all bound to 127.0.0.1, so only this machine can reach them):
+#   9007  frontend  - open http://localhost:9007 in the browser
+#   9008  backend   - the API (the frontend forwards /api to it)
+#   9009  database  - MongoDB, for admin tools on this machine only (no password,
+#                     so never publish it on 0.0.0.0)
+# Live URL: https://neutaracabs.cftools.live — the HTTPS proxy on the host forwards to 127.0.0.1:9007.
 name: neutara-cabs-booking
 
 services:
@@ -14,13 +15,14 @@ services:
     image: mongo:7.0
     container_name: neutara-cabs-booking-mongo
     hostname: mongo
-    command: ["--replSet", "rs0", "--bind_ip_all"]
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "9009"]
+    ports: ["127.0.0.1:9009:9009"]
     volumes: ["mongo-data:/data/db"]
-    networks: [db]
+    networks: [net]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok }"]
+      test: ["CMD", "mongosh", "--port", "9009", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:9009'}]}).ok }"]
       interval: 5s
       timeout: 10s
       retries: 20
@@ -40,11 +42,32 @@ services:
     environment:
       # Set here so a development server/.env can't switch off the production checks.
       NODE_ENV: production
-      MONGODB_URI: mongodb://mongo:27017/cab_booking?replicaSet=rs0
-      PORT: 4000
-    ports: ["127.0.0.1:4000:4000"]
-    # "db" reaches MongoDB; "egress" lets the app reach Microsoft sign-in and the mail server.
-    networks: [db, egress]
+      MONGODB_URI: mongodb://mongo:9009/cab_booking?replicaSet=rs0
+      PORT: 9008
+      # Requests pass two proxies: the HTTPS proxy for neutaracabs.cftools.live, then the
+      # frontend's nginx. Raise this if more proxies are added (e.g. a CDN in front).
+      TRUST_PROXY: 2
+    ports: ["127.0.0.1:9008:9008"]
+    networks: [net]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  web:
+    build:
+      context: .
+      target: web
+    image: neutara-cabs-booking-web:latest
+    container_name: neutara-cabs-booking-web
+    hostname: web
+    depends_on:
+      app:
+        condition: service_healthy
+    ports: ["127.0.0.1:9007:9007"]
+    networks: [net]
     restart: unless-stopped
     read_only: true
     tmpfs: ["/tmp"]
@@ -53,12 +76,8 @@ services:
     logging: *logging
 
 networks:
-  # No route in or out: only the app can talk to MongoDB.
-  db:
-    name: neutara-cabs-booking-db
-    internal: true
-  egress:
-    name: neutara-cabs-booking-egress
+  net:
+    name: neutara-cabs-booking-net
 
 volumes:
   mongo-data:
