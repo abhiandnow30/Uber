@@ -9,6 +9,7 @@ import { pinoHttp } from 'pino-http';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { metrics } from './metrics.js';
+import { emitDataChanged } from './realtime.js';
 import { csrfProtection, loadSession, requireAuth } from './middleware/auth.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/common.js';
 import { EmailOutbox } from './models/system.js';
@@ -77,6 +78,16 @@ export function createApp() {
 
   // ---- API ----
   const api = Router();
+  // Every successful change, by any role, refreshes everyone's open screens (see emitDataChanged).
+  // Skipped: sign-in/password requests, marking one's own notifications read, and the one POST
+  // that only looks things up (it would make screens refresh each other in a loop).
+  api.use((req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || /^\/(auth|notifications)\//.test(req.path) || req.path === '/ops/trips/eligible') return next();
+    res.on('finish', () => {
+      if (res.statusCode < 400) emitDataChanged();
+    });
+    next();
+  });
   api.use(loadSession);
   api.use(apiLimiter);
   api.use(csrfProtection);

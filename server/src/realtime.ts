@@ -63,6 +63,14 @@ export function emitToRole(role: string, event: string, payload: unknown) {
   io?.to(`role:${role}`).emit(event, payload);
 }
 
+/**
+ * "Something changed" to every signed-in screen, so all roles see a change at once. It carries no
+ * data: each screen re-fetches through its own API, which only returns what that person may see.
+ */
+export function emitDataChanged() {
+  io?.emit('data:changed');
+}
+
 /** Coordinators scoped to an office + all admins. */
 export function emitToOperations(officeLocation: string | undefined, event: string, payload: unknown) {
   if (!io) return;

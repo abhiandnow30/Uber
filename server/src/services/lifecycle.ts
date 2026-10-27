@@ -3,7 +3,7 @@ import { canTransitionBooking, type BookingStatus } from '../domain.js';
 import { CabRequest, TripStatusHistory, type CabRequestDoc } from '../models/booking.js';
 import { Coordinator } from '../models/Coordinator.js';
 import { User } from '../models/User.js';
-import { emitToOperations, emitToUser } from '../realtime.js';
+import { emitDataChanged, emitToOperations, emitToUser } from '../realtime.js';
 import { AppError } from '../utils/errors.js';
 import { fmt12h } from '../utils/time.js';
 import type { Actor } from './audit.service.js';
@@ -71,6 +71,8 @@ export function broadcastBookingUpdate(b: { _id: unknown; reference: string; sta
   const payload = { bookingId: String(b._id), reference: b.reference, status: b.status, isDelayed: !!b.isDelayed };
   emitToOperations(b.officeLocation, 'booking:updated', payload);
   emitToUser(String(b.employeeUser), 'booking:updated', payload);
+  // Also covers changes made in the background (e.g. auto-cancel), which no API request announces.
+  emitDataChanged();
 }
 
 /** In-app notification for every active coordinator scoped to the office. */
