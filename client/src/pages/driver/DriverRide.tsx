@@ -5,9 +5,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, Card, DescriptionList, ErrorState, Modal, Select, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
 import { ApiError, errorMessage, get, post } from '../../lib/api';
 import { useUnsavedChanges } from '../../lib/unsaved';
-import { fmt12h, fmtDateTime, fmtTravelDate, mapsDirectionsUrl } from '../../lib/format';
+import { fmt12h, fmtDateTime, fmtTravelDate } from '../../lib/format';
+import { navigationUrl } from '../../lib/maps';
 
-type Ride = {
+export type Ride = {
   assignmentId: string;
   assignmentStatus: string;
   acknowledgedAt?: string | null;
@@ -30,16 +31,25 @@ type Ride = {
     passengers: number;
     notes?: string;
     isDelayed?: boolean;
+    direction?: 'IN' | 'OUT';
   } | null;
   employee: { name?: string } | null;
+  // The shared cab this ride belongs to, if any.
+  tripId?: string | null;
+  tripName?: string | null;
   pin: { status: string; attemptsRemaining: number } | null;
   driverNotes?: string;
+  // Exact spots for navigation (only while the ride is active; null when not pinned).
+  pickupPoint?: { lat: number; lng: number } | null;
+  dropPoint?: { lat: number; lng: number } | null;
 };
 
 type PinMsg = { tone: 'error' | 'warn' | 'success'; title: string; text: string } | null;
 
-function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () => void; onNotActive: (msg: string) => void }) {
+export function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () => void; onNotActive: (msg: string) => void }) {
   const [typed, setPin] = useState('');
+  // The blinking cursor shows in the next empty box while the PIN field is active.
+  const [focused, setFocused] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<PinMsg>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -132,7 +142,7 @@ function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () 
                 )}
                 aria-hidden
               >
-                {typed[i] ?? ''}
+                {typed[i] ?? (i === typed.length && focused && !busy ? <span className="caret-blink h-8 w-0.5 rounded-full bg-violet-600" /> : '')}
               </span>
             ))}
             <input
@@ -151,6 +161,8 @@ function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStarted: () 
                 setPin(v);
                 if (v.length === 4) void submit(undefined, v);
               }}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
               className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
               aria-describedby="pin-attempts"
               disabled={busy}
@@ -308,9 +320,9 @@ export default function DriverRide() {
     </div>
   );
 
-  const navigateTo = (place: string, label: string) => (
+  const navigateTo = (point: { lat: number; lng: number } | null | undefined, place: string, label: string) => (
     <a
-      href={mapsDirectionsUrl(place)}
+      href={navigationUrl(point, place)}
       target="_blank"
       rel="noopener noreferrer"
       className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white text-lg font-semibold text-indigo-700 shadow-xs active:bg-slate-50"
@@ -335,7 +347,7 @@ export default function DriverRide() {
     } else if (status === 'DRIVER_EN_ROUTE') {
       primary = (
         <div className="space-y-3">
-          {navigateTo(b.pickupLocation, 'Navigate to pickup')}
+          {navigateTo(ride.pickupPoint, b.pickupLocation, 'Navigate to pickup')}
           <Button size="xl" loading={busy} onClick={() => run('arrived', 'Arrival recorded — the passenger has been notified')} icon={<MapPin className="h-6 w-6" aria-hidden />}>
             I have arrived
           </Button>
@@ -362,7 +374,7 @@ export default function DriverRide() {
     } else if (status === 'IN_PROGRESS') {
       primary = (
         <div className="space-y-3">
-          {navigateTo(b.dropLocation, 'Navigate to drop')}
+          {navigateTo(ride.dropPoint, b.dropLocation, 'Navigate to drop')}
           <Button size="xl" variant="success" loading={busy} onClick={complete} icon={<CheckCircle2 className="h-6 w-6" aria-hidden />}>
             Complete trip
           </Button>
@@ -475,13 +487,13 @@ export default function DriverRide() {
   );
 }
 
-type DriverCancelReason = 'NOT_COMING' | 'NO_SHOW' | 'OTHER';
+export type DriverCancelReason = 'NOT_COMING' | 'NO_SHOW' | 'OTHER';
 
 /**
  * Driver cancels because of the passenger. "Didn't show up" is only offered at the pickup (after
  * "Arrived") and is recorded as a no-show; "Other" needs a reason. The coordinator is informed.
  */
-function DriverCancelDialog({ open, arrived, onClose, onConfirm }: { open: boolean; arrived: boolean; onClose: () => void; onConfirm: (reason: DriverCancelReason, note: string) => Promise<unknown> }) {
+export function DriverCancelDialog({ open, arrived, onClose, onConfirm }: { open: boolean; arrived: boolean; onClose: () => void; onConfirm: (reason: DriverCancelReason, note: string) => Promise<unknown> }) {
   const [reason, setReason] = useState<DriverCancelReason | ''>('');
   const [note, setNote] = useState('');
   const [error, setError] = useState('');

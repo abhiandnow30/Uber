@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, Car, Pencil, Phone, Plus, X } from 'lucide-react';
+import { CalendarClock, Car, Pencil, Phone, Plus, Users, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Alert, Button, Card, EmptyState, ErrorState, PageHeader, Spinner, cn, useToast } from '../../components/ui';
@@ -7,6 +7,7 @@ import { CancelRideDialog, cabIsLate } from './CancelRideDialog';
 import { get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fmtTravelDate } from '../../lib/format';
+import { RideRouteLink } from '../../components/RideRouteLink';
 import { pickupLabel } from '../../lib/policy';
 import { PinCard, PRE_START } from './MyBookingDetail';
 
@@ -27,9 +28,12 @@ type HomeBooking = {
   scheduledPickupAt?: string;
   pickupLocation: string;
   dropLocation: string;
+  officeLocation?: string;
   passengers: number;
   isDelayed?: boolean;
   currentAssignment?: Assigned | string;
+  // Set when the cab is shared: its name, how many ride in it, and this employee's place in the stops.
+  sharedCab?: { name: string; riders: number; stop: number; direction: 'IN' | 'OUT'; route?: string[] } | null;
 };
 
 type HomeData = {
@@ -81,9 +85,24 @@ function NextRideCard({ b, onCancel }: { b: HomeBooking; onCancel: (b: HomeBooki
       <p className="mt-3 text-lg font-semibold text-slate-900">
         {fmtTravelDate(b.travelDate)} · {pickupLabel(b)}
       </p>
-      <p className="text-sm text-slate-700">
-        {b.pickupLocation} <span aria-label="to">→</span> {b.dropLocation}
-      </p>
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-sm text-slate-700">
+          {b.pickupLocation} <span aria-label="to">→</span> {b.dropLocation}
+        </p>
+        <RideRouteLink ride={b} />
+      </div>
+      {b.sharedCab && (
+        <p className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-lg bg-white/70 px-3 py-2 text-sm text-slate-700 ring-1 ring-indigo-100">
+          <Users className="h-4 w-4 text-indigo-600" aria-hidden />
+          <span className="font-medium text-indigo-900">Shared cab · {b.sharedCab.name}</span>
+          <span>
+            · {b.sharedCab.riders} riders · you&apos;re {b.sharedCab.direction === 'IN' ? 'pickup' : 'drop'}{' '}
+            <strong>
+              {b.sharedCab.stop} of {b.sharedCab.riders}
+            </strong>
+          </span>
+        </p>
+      )}
 
       {waiting ? (
         <p className="mt-3 text-sm text-slate-600">We will let you know as soon as a driver and cab are assigned.</p>
@@ -179,12 +198,14 @@ export default function EmployeeHome() {
     <>
       <PageHeader title={firstName ? `Hi, ${firstName}` : 'Welcome'} subtitle="Book your office cab in a few taps." />
 
-      {!me?.profile?.homeAddress && (
+      {(!me?.profile?.homeAddress || !me?.profile?.homeLocation) && (
         <div className="mb-4">
-          <Alert tone="info" title="Add your present address">
-            Save it once and your cab requests will be filled in automatically.{' '}
+          <Alert tone="warn" title={!me?.profile?.homeAddress ? 'Add your present address' : 'Add your home’s Google Maps link'}>
+            {!me?.profile?.homeAddress
+              ? 'Save it once and your cab requests will be filled in automatically.'
+              : 'It’s needed before you can request a cab, so your driver navigates straight to your home.'}{' '}
             <Link to="/account" className="font-medium underline">
-              Add present address
+              {!me?.profile?.homeAddress ? 'Add present address' : 'Add map link'}
             </Link>
           </Alert>
         </div>

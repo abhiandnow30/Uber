@@ -369,10 +369,14 @@ export function Alert({ tone = 'info', title, children }: { tone?: 'info' | 'war
 export function Modal({ open, onClose, title, children, footer, size = 'md' }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl' }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // The latest onClose, so the effect below runs only when the popup opens or closes (it moves focus
+  // to the first field; re-running it on every render would steal focus while typing).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCloseRef.current();
     document.addEventListener('keydown', onKey);
     document.body.style.overflow = 'hidden';
     setTimeout(() => ref.current?.querySelector<HTMLElement>('input,select,textarea,button:not([data-close])')?.focus(), 0);
@@ -381,7 +385,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: {
       document.body.style.overflow = '';
       prev?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
   if (!open) return null;
   const sizes = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
   return (

@@ -25,6 +25,7 @@ import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
 import { usePolicy } from '../../lib/policy';
 import { useSsoConfig } from '../../lib/sso';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
+import { AddressPicker, sameSpot, type LatLng, type MapSpot } from '../../components/LocationPicker';
 
 export type EmployeeRow = {
   _id: string;
@@ -35,6 +36,8 @@ export type EmployeeRow = {
   officeLocation?: string;
   route?: string;
   homeAddress?: string;
+  homeLocation?: LatLng | null;
+  homeMapLink?: string;
   source?: string;
   status?: string;
   lastLoginAt?: string;
@@ -54,6 +57,11 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
   const editing = !!employee;
   const [form, setForm] = useState<FormState>(EMPTY);
   const [initial, setInitial] = useState<FormState>(EMPTY);
+  // The exact spot (Google Maps link + coordinates), kept apart from the text fields; the field is
+  // rebuilt each time the popup opens.
+  const [spot, setSpot] = useState<MapSpot>({ link: '', pin: null });
+  const [initialSpot, setInitialSpot] = useState<MapSpot>({ link: '', pin: null });
+  const [mapKey, setMapKey] = useState(0);
   const [sendInvitation, setSendInvitation] = useState(true);
   const msOnly = !!useSsoConfig().data?.employeesMicrosoftOnly;
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -80,6 +88,10 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
         : { ...EMPTY, officeLocation: policy.data?.officeLocations.find((o) => o.active)?.code ?? '' };
     setForm(start);
     setInitial(start);
+    const startSpot: MapSpot = { link: employee?.homeMapLink ?? '', pin: employee?.homeLocation ? { lat: employee.homeLocation.lat, lng: employee.homeLocation.lng } : null };
+    setSpot(startSpot);
+    setInitialSpot(startSpot);
+    setMapKey((k) => k + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, employee]);
 
@@ -104,9 +116,13 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
       let id: string;
       if (editing) {
         const { employeeId: _ignored, ...rest } = form;
-        const diff = Object.fromEntries(
+        const diff: Record<string, unknown> = Object.fromEntries(
           Object.entries(rest).filter(([k, val]) => val.trim() !== String((employee as Record<string, unknown>)[k] ?? '')),
         );
+        if (!sameSpot(spot, initialSpot)) {
+          diff.homeLocation = spot.pin;
+          diff.homeMapLink = spot.pin ? spot.link.trim() : '';
+        }
         if (!Object.keys(diff).length) {
           onClose();
           return true;
@@ -115,7 +131,7 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
         id = employee!._id;
         toast.success('Employee updated');
       } else {
-        const created = await post<{ _id: string }>('/admin/employees', { ...form, sendInvitation });
+        const created = await post<{ _id: string }>('/admin/employees', { ...form, ...(spot.pin ? { homeLocation: spot.pin, homeMapLink: spot.link.trim() } : {}), sendInvitation });
         id = created._id;
         toast.success(
           'Employee added',
@@ -146,7 +162,7 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
     ev.preventDefault();
     void save();
   };
-  const guard = useUnsavedChanges(open && changed(form, initial), save);
+  const guard = useUnsavedChanges(open && (changed(form, initial) || !sameSpot(spot, initialSpot)), save);
   const close = () => guard(onClose);
 
   const offices = policy.data?.officeLocations ?? [];
@@ -213,15 +229,18 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
               <option key={r} value={r} />
             ))}
           </datalist>
-          <Input
-            label="Present address"
-            className="sm:col-span-2"
-            maxLength={300}
-            value={form.homeAddress}
-            onChange={set('homeAddress')}
-            error={errors.homeAddress}
-            hint="Optional. Employees can also add or change this themselves under Account."
-          />
+          <div className="sm:col-span-2">
+            <AddressPicker
+              key={mapKey}
+              address={form.homeAddress}
+              onAddress={(v) => setForm((f) => ({ ...f, homeAddress: v }))}
+              spot={spot}
+              onSpot={setSpot}
+              saved={sameSpot(spot, initialSpot)}
+              error={errors.homeAddress}
+              hint="Optional. Employees can also add or change this themselves under Account."
+            />
+          </div>
         </div>
         {!editing && !msOnly && (
           <Checkbox

@@ -171,11 +171,22 @@ describe('Entra ID single sign-on', () => {
     expect(ctx.body.routes).toBeUndefined(); // employees don't choose their route
     expect(ctx.body.offices.map((o: { code: string }) => o.code)).toContain('HYD');
 
-    const form = { employeeId: '1470', fullName: 'Harika Velidi', phone: '7036580058', officeLocation: 'HYD', homeAddress: 'Ramky one symphony, Patancheru, 502319' };
-    for (const field of ['phone', 'homeAddress', 'officeLocation', 'employeeId'] as const) {
+    const form = {
+      employeeId: '1470',
+      fullName: 'Harika Velidi',
+      phone: '7036580058',
+      officeLocation: 'HYD',
+      homeAddress: 'Ramky one symphony, Patancheru, 502319',
+      homeLocation: { lat: 17.5313, lng: 78.2658 },
+      homeMapLink: 'https://maps.google.com/?q=17.5313,78.2658',
+    };
+    for (const field of ['phone', 'homeAddress', 'officeLocation', 'employeeId', 'homeMapLink'] as const) {
       const res = await client.post('/api/auth/sso/register', { ...form, [field]: '' });
       expect(res.status, field).toBe(422);
     }
+    // the home's map link (its exact spot) is required too
+    const { homeLocation: _l, ...withoutSpot } = form;
+    expect((await client.post('/api/auth/sso/register', withoutSpot)).status).toBe(422);
     // The email always comes from Microsoft, and the route from an admin, never from the form.
     await client.post('/api/auth/sso/register', { ...form, email: 'someone.else@company.com', route: 'Self Picked Cab' }).expect(201);
 
@@ -203,7 +214,7 @@ describe('Entra ID single sign-on', () => {
 
     const takenId = (await makeEmployee()).employee.employeeId;
     client.agent.jar.setCookie(`cab_sso_reg=${ticket}; Path=/api/auth/sso`);
-    const res = await client.post('/api/auth/sso/register', { employeeId: takenId, fullName: 'T Person', phone: '9000000000', officeLocation: 'HYD', route: 'Kondapur Cab', homeAddress: 'Somewhere, Hyderabad' });
+    const res = await client.post('/api/auth/sso/register', { employeeId: takenId, fullName: 'T Person', phone: '9000000000', officeLocation: 'HYD', route: 'Kondapur Cab', homeAddress: 'Somewhere, Hyderabad', homeLocation: { lat: 17.4, lng: 78.4 }, homeMapLink: 'https://maps.google.com/?q=17.4,78.4' });
     expect(res.status).toBe(409);
     expect(await User.exists({ email: 't@company.com' })).toBeNull();
   });

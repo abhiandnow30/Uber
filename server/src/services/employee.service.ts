@@ -48,6 +48,10 @@ export const employeeInputSchema = z.object({
   officeLocation: z.string().trim().toUpperCase().min(1, 'Office location is required'),
   route: z.string().trim().max(120).optional().default(''),
   homeAddress: z.string().trim().max(300).optional().default(''),
+  // The pin on the map; null removes it.
+  homeLocation: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).nullable().optional(),
+  // The Google Maps link (or coordinates) it came from.
+  homeMapLink: z.string().trim().max(2000).optional().default(''),
 });
 export type EmployeeInput = z.infer<typeof employeeInputSchema>;
 
@@ -132,6 +136,13 @@ export async function updateEmployee(actor: Actor, id: string, patch: z.infer<ty
         { $set: { ...(patch.fullName ? { name: patch.fullName } : {}), ...(patch.phone !== undefined ? { phone: patch.phone } : {}) } },
         { session },
       );
+    }
+    if (patch.homeLocation !== undefined) {
+      const before = employee.homeLocation ? { lat: employee.homeLocation.lat, lng: employee.homeLocation.lng } : null;
+      if (JSON.stringify(before) !== JSON.stringify(patch.homeLocation)) {
+        changes.homeLocation = { from: before, to: patch.homeLocation };
+        employee.set('homeLocation', patch.homeLocation ?? undefined);
+      }
     }
     if (!Object.keys(changes).length) return employee;
     if (changes.homeAddress) employee.homeAddressUpdatedAt = new Date();
@@ -244,6 +255,10 @@ export const selfProfileSchema = z
   .object({
     homeAddress: z.string().trim().min(5, 'Enter your full home address').max(300).optional(),
     defaultShift: z.string().trim().toUpperCase().max(20).optional(),
+    // The exact spot of the home (from a Google Maps link); null removes it.
+    // Employees can replace their home's spot but not remove it (it's required for their rides).
+    homeLocation: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).optional(),
+    homeMapLink: z.string().trim().min(1, 'Add your home’s Google Maps link').max(2000).optional(),
     phone: z
       .string()
       .trim()
@@ -273,7 +288,12 @@ export async function updateMyProfile(actor: Actor, input: z.infer<typeof selfPr
     if (input.homeAddress !== undefined && input.homeAddress !== (employee.homeAddress ?? '')) changed.push('homeAddress');
     if (input.defaultShift !== undefined && input.defaultShift !== (employee.defaultShift ?? '')) changed.push('defaultShift');
     if (input.phone !== undefined && input.phone !== (employee.phone ?? '')) changed.push('phone');
+    const pinBefore = employee.homeLocation ? { lat: employee.homeLocation.lat, lng: employee.homeLocation.lng } : null;
+    if (input.homeLocation !== undefined && JSON.stringify(pinBefore) !== JSON.stringify(input.homeLocation)) changed.push('homeLocation');
+    if (input.homeMapLink !== undefined && input.homeMapLink !== (employee.homeMapLink ?? '')) changed.push('homeMapLink');
     if (!changed.length) return employee;
+    if (changed.includes('homeLocation')) employee.set('homeLocation', input.homeLocation ?? undefined);
+    if (changed.includes('homeMapLink')) employee.homeMapLink = input.homeMapLink || undefined;
     if (input.homeAddress !== undefined) employee.homeAddress = input.homeAddress;
     if (changed.includes('homeAddress')) employee.homeAddressUpdatedAt = new Date();
     if (input.defaultShift !== undefined) employee.defaultShift = input.defaultShift || undefined;
@@ -319,7 +339,7 @@ export async function deleteEmployee(actor: Actor, id: string, reason: string) {
       const now = new Date();
       await Employee.updateOne(
         { _id: employee._id },
-        { $set: { deletedAt: now, deletedReason: reason, deletedBy: actor.id }, $unset: { phone: 1, homeAddress: 1, homeAddressUpdatedAt: 1, route: 1 } },
+        { $set: { deletedAt: now, deletedReason: reason, deletedBy: actor.id }, $unset: { phone: 1, homeAddress: 1, homeAddressUpdatedAt: 1, homeLocation: 1, homeMapLink: 1, route: 1 } },
         { session },
       );
       await User.updateOne({ _id: employee.user }, { $set: { status: 'INACTIVE', statusReason: `Deleted: ${reason}`, statusChangedAt: now }, $unset: { phone: 1 } }, { session });

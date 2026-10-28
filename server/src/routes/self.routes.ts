@@ -25,6 +25,9 @@ import {
   driverHome,
   driverRide,
   driverRideHistory,
+  driverTrip,
+  reorderTrip,
+  sharedCabFor,
   markArrived,
   markEnRoute,
   markNoShow,
@@ -56,8 +59,15 @@ employeeRouter.get('/home', async (req, res) => {
     Notification.countDocuments({ user: me, readAt: null }),
     employee?.officeLocation ? hasCabForCurrentWorkDay(String(me), employee.officeLocation) : false,
   ]);
-  const active = upcoming.find((b) => ['DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'].includes(b.status)) ?? null;
-  res.json({ pending, upcoming, activeTrip: active, recent, unreadNotifications: unread, openStatuses: OPEN_STATUSES, bookedToday });
+  // A ride in a shared cab also says so: how many ride in it and this employee's place in the stops.
+  const withShare = await Promise.all(
+    upcoming.map(async (b) => {
+      const a = b.currentAssignment as unknown as { _id?: unknown } | null;
+      return { ...b, sharedCab: a?._id ? await sharedCabFor(a._id) : null };
+    }),
+  );
+  const active = withShare.find((b) => ['DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'].includes(b.status)) ?? null;
+  res.json({ pending, upcoming: withShare, activeTrip: active, recent, unreadNotifications: unread, openStatuses: OPEN_STATUSES, bookedToday });
 });
 
 employeeRouter.get('/profile', async (req, res) => {
@@ -109,6 +119,17 @@ driverRouter.get('/home', async (req, res) => {
 driverRouter.get('/rides/history', async (req, res) => {
   const p = query(paginationSchema, req);
   res.json(await driverRideHistory(actorFromRequest(req), p.page, p.pageSize));
+});
+// A shared cab as one trip: all its riders for this driver, in stop order.
+driverRouter.get('/trips/:tripId', async (req, res) => {
+  const tripId = String(req.params.tripId);
+  if (!/^[\w-]{8,64}$/.test(tripId)) throw new AppError(404, 'NOT_FOUND', 'Trip not found');
+  res.json(await driverTrip(actorFromRequest(req), tripId));
+});
+// The driver's own stop order for a shared cab.
+driverRouter.post('/trips/:tripId/order', async (req, res) => {
+  const input = body(z.object({ assignmentIds: z.array(z.string().regex(/^[a-f0-9]{24}$/)).min(1).max(60) }), req);
+  res.json(await reorderTrip(actorFromRequest(req), String(req.params.tripId), input.assignmentIds));
 });
 driverRouter.get('/rides/:id', async (req, res) => {
   res.json(await driverRide(actorFromRequest(req), String(req.params.id)));

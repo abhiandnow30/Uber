@@ -81,6 +81,8 @@ export default function RequestCab() {
 
   // The route isn't asked: the server uses the saved home address and the office, and the transport team plans the cab route.
   const homeText = ((me?.profile ?? {}) as { homeAddress?: string }).homeAddress ?? '';
+  // The home's exact spot (from its Google Maps link) is required before requesting a cab.
+  const hasHomePin = !!((me?.profile ?? {}) as { homeLocation?: unknown }).homeLocation;
   const officeText = office ? `${office.name}${office.address ? `, ${office.address}` : ''}` : myOffice;
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => {
@@ -171,8 +173,8 @@ export default function RequestCab() {
       setFormError({ title: 'Your office is not accepting cab requests', message: 'Please contact your administrator.' });
       return false;
     }
-    if (!homeText) {
-      setFormError({ title: 'Add your present address first', message: 'The transport team plans your cab route from it.' });
+    if (!homeText || !hasHomePin) {
+      setFormError({ title: !homeText ? 'Add your present address first' : 'Add your home’s Google Maps link first', message: 'Add it under Account, so the transport team and your driver find you exactly.' });
       return false;
     }
     setSubmitting(true);
@@ -345,7 +347,7 @@ export default function RequestCab() {
               <p className="text-sm text-slate-500">Select your shift to see your cab.</p>
             )}
 
-            {homeText ? (
+            {homeText && hasHomePin ? (
               (() => {
                 const toHome = direction === 'OUT';
                 const stops: Array<[string, string, boolean]> = [
@@ -369,10 +371,10 @@ export default function RequestCab() {
                 );
               })()
             ) : (
-              <Alert tone="warn" title="Add your present address">
-                The transport team plans your cab route from it.{' '}
+              <Alert tone="warn" title={!homeText ? 'Add your present address' : 'Add your home’s Google Maps link'}>
+                {!homeText ? 'The transport team plans your cab route from it.' : 'Your driver navigates to it, so it must be exact.'}{' '}
                 <Link to="/account" className="font-medium underline">
-                  Add present address
+                  {!homeText ? 'Add present address' : 'Add map link in Account'}
                 </Link>
               </Alert>
             )}

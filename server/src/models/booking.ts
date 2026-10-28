@@ -131,6 +131,8 @@ const cabAssignmentSchema = new Schema(
     // in time (they ride together); the name is the coordinator's label, e.g. "Kondapur & Madhapur Cab".
     tripId: { type: String, index: true },
     tripName: { type: String, trim: true, maxlength: 120 },
+    // The driver's chosen place of this rider in the shared cab's stops (0 = first); unset = suggested.
+    stopOrder: { type: Number, min: 0 },
   },
   { timestamps: true },
 );

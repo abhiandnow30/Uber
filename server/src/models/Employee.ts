@@ -6,6 +6,7 @@ export const EMPLOYEE_EDITABLE_FIELDS = [
   'officeLocation',
   'route',
   'homeAddress',
+  'homeMapLink',
 ] as const;
 export type EmployeeEditableField = (typeof EMPLOYEE_EDITABLE_FIELDS)[number];
 
@@ -23,6 +24,13 @@ const employeeSchema = new Schema(
     // read it; coordinators and drivers only see the pickup/drop text of a booking.
     homeAddress: { type: String, trim: true, maxlength: 300 },
     homeAddressUpdatedAt: { type: Date },
+    // The Google Maps link the location was taken from (or the coordinates typed), shown back as given.
+    homeMapLink: { type: String, trim: true, maxlength: 2000 },
+    // Exact spot of the address, from that link (same privacy as the address).
+    homeLocation: {
+      type: new Schema({ lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } }, { _id: false }),
+      default: undefined,
+    },
     // Shift code the employee usually works; pre-selected on the cab request form.
     defaultShift: { type: String, trim: true, uppercase: true, maxlength: 20 },
     source: { type: String, enum: ['MANUAL', 'IMPORT', 'ACCESS_REQUEST', 'SSO', 'SEED'], default: 'MANUAL' },

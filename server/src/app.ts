@@ -16,6 +16,7 @@ import { EmailOutbox } from './models/system.js';
 import { adminRouter } from './routes/admin.routes.js';
 import { authRouter } from './routes/auth.routes.js';
 import { notificationRouter } from './routes/notification.routes.js';
+import { geoRouter } from './routes/geo.routes.js';
 import { operationsRouter } from './routes/operations.routes.js';
 import { driverRouter, employeeRouter } from './routes/self.routes.js';
 import { getPolicy } from './services/policy.service.js';
@@ -97,6 +98,7 @@ export function createApp() {
     res.json({ officeLocations: p.officeLocations, shifts: p.shifts, booking: p.booking, version: p.version });
   });
   api.use('/notifications', requireAuth, notificationRouter);
+  api.use('/geo', requireAuth, geoRouter);
   api.use('/admin', requireAuth, adminRouter);
   api.use('/ops', requireAuth, operationsRouter);
   api.use('/me', requireAuth, employeeRouter);

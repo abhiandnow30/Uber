@@ -22,6 +22,7 @@ import { AppError } from '../utils/errors.js';
 import { logger } from '../logger.js';
 import { coordinatorPhoneLogin } from '../services/coordinatorAuth.service.js';
 import { driverPhoneLogin } from '../services/driverAuth.service.js';
+import { linkLimiter, mapsLinkLookup } from './geo.routes.js';
 
 export const authRouter = Router();
 
@@ -163,6 +164,12 @@ const registrationTicket = (req: { cookies?: Record<string, string> }) => {
 
 authRouter.get('/sso/registration', async (req, res) => {
   res.json(await getRegistrationContext(registrationTicket(req)));
+});
+
+// The registration form's Google Maps link reader: only for someone with a valid registration ticket.
+authRouter.get('/sso/geo/link', linkLimiter, async (req, res) => {
+  registrationTicket(req);
+  await mapsLinkLookup(req, res);
 });
 
 authRouter.post('/sso/register', publicFormLimiter, async (req, res) => {

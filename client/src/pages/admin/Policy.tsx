@@ -7,6 +7,7 @@ import { fmt12h, fmtDateTime } from '../../lib/format';
 import { fieldErrors } from '../../lib/hooks';
 import type { Office, Shift } from '../../lib/policy';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
+import { MapLinkField, sameSpot } from '../../components/LocationPicker';
 
 type FullPolicy = {
   _id: string;
@@ -313,6 +314,12 @@ function useTouchedRows() {
   };
 }
 
+/** Whether an office row's location (link + spot) is what's stored for that office. */
+function officeSpotSaved(r: Office, stored: Office[]) {
+  const o = stored.find((x) => x.code === r.code);
+  return !!o && sameSpot({ link: r.mapLink ?? '', pin: r.location ?? null }, { link: o.mapLink ?? '', pin: o.location ?? null });
+}
+
 function OfficesSection({ values, onState }: { values: Office[]; onState: (s: AutoSave) => void }) {
   const t = useTouchedRows();
   const s = useAutoSave(values, {
@@ -329,7 +336,16 @@ function OfficesSection({ values, onState }: { values: Office[]; onState: (s: Au
       if (!rows.length) v._ = 'At least one office is required';
       return v;
     },
-    toBody: (rows) => ({ officeLocations: rows.map((r) => ({ code: r.code.trim().toUpperCase(), name: r.name.trim(), address: r.address?.trim() ?? '', timezone: r.timezone.trim(), active: r.active })) }),
+    toBody: (rows) => ({
+      officeLocations: rows.map((r) => ({
+        code: r.code.trim().toUpperCase(),
+        name: r.name.trim(),
+        address: r.address?.trim() ?? '',
+        timezone: r.timezone.trim(),
+        active: r.active,
+        ...(r.location ? { location: r.location, mapLink: r.mapLink?.trim() ?? '' } : {}),
+      })),
+    }),
   });
   useEffect(() => onState({ dirty: s.dirty && s.status !== 'saving', commit: () => s.commit() }), [s.dirty, s.status, s.commit, onState]);
   const rows = s.value;
@@ -379,6 +395,21 @@ function OfficesSection({ values, onState }: { values: Office[]; onState: (s: Au
                 onClick={() => {
                   t.reset();
                   void s.commit(rows.filter((_, j) => j !== i));
+                }}
+              />
+            </div>
+            <div className="sm:col-span-2 lg:col-span-12">
+              <MapLinkField
+                label="Google Maps link of the office"
+                spot={{ link: r.mapLink ?? '', pin: r.location ?? null }}
+                saved={officeSpotSaved(r, values)}
+                onSpot={(v) => {
+                  const next = edit(i, { mapLink: v.link, location: v.pin ?? undefined });
+                  // Typing only changes the box; the office saves once its location is read (or removed).
+                  if (JSON.stringify(v.pin) !== JSON.stringify(r.location ?? null)) {
+                    t.touch(i);
+                    void s.commit(next);
+                  } else s.set(next);
                 }}
               />
             </div>

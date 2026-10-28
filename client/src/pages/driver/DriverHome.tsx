@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Bell, Car, ChevronRight, History } from 'lucide-react';
+import { ArrowRight, Bell, Car, ChevronRight, History, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Alert, Button, Card, EmptyState, ErrorState, Spinner } from '../../components/ui';
@@ -31,9 +31,34 @@ type RideView = {
     passengers: number;
     notes?: string;
     isDelayed?: boolean;
+    direction?: 'IN' | 'OUT';
   } | null;
   employee: { name?: string } | null;
+  // A shared cab: its id and name, and how many of its riders are still on.
+  tripId?: string | null;
+  tripName?: string | null;
+  tripRiders?: number;
 };
+
+/** Several riders in one cab show (and open) as one trip. */
+const isSharedTrip = (r: RideView) => !!r.tripId && (r.tripRiders ?? 0) > 1;
+const openPath = (r: RideView) => (isSharedTrip(r) ? `/driver/trips/${r.tripId}` : `/driver/rides/${r.assignmentId}`);
+
+/** Upcoming rides with each shared cab folded into one entry (its riders together). */
+function groupTrips(rides: RideView[]): RideView[][] {
+  const groups: RideView[][] = [];
+  const byTrip = new Map<string, RideView[]>();
+  for (const r of rides) {
+    if (!isSharedTrip(r)) groups.push([r]);
+    else if (byTrip.has(r.tripId!)) byTrip.get(r.tripId!)!.push(r);
+    else {
+      const g = [r];
+      byTrip.set(r.tripId!, g);
+      groups.push(g);
+    }
+  }
+  return groups;
+}
 
 type DriverHomeData = {
   driver: {
@@ -69,11 +94,37 @@ const isSameLocalDay = (iso?: string | null) => {
   return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
 };
 
+/** An upcoming shared cab: one trip with several riders. */
+function TripCard({ rides }: { rides: RideView[] }) {
+  const b = rides[0].booking;
+  const toOffice = b?.direction === 'IN';
+  return (
+    <Link to={openPath(rides[0])} className="flex items-center gap-3 rounded-2xl border-2 border-indigo-200 bg-white p-4 shadow-xs active:bg-slate-50">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <span className="text-2xl font-bold text-slate-900">{b?.pickupTime ? fmt12h(b.pickupTime) : '—'}</span>
+          <span className="text-sm text-slate-500">{b ? fmtTravelDate(b.travelDate) : '—'}</span>
+          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800">
+            <Users className="mr-1 inline h-3.5 w-3.5" aria-hidden />
+            {rides.length} riders
+          </span>
+        </div>
+        <p className="mt-1 text-base font-semibold text-slate-900">{rides[0].tripName ?? 'Shared cab'}</p>
+        <p className="text-sm text-slate-600">
+          {toOffice ? 'Pick up' : 'From the office, drop'} {rides.map((r) => r.employee?.name ?? 'Passenger').join(', ')}
+          {toOffice ? ' → office' : ''}
+        </p>
+      </div>
+      <ChevronRight className="h-6 w-6 shrink-0 text-slate-400" aria-hidden />
+    </Link>
+  );
+}
+
 /** An upcoming ride. */
 function RideCard({ r }: { r: RideView }) {
   const b = r.booking;
   return (
-    <Link to={`/driver/rides/${r.assignmentId}`} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs active:bg-slate-50">
+    <Link to={openPath(r)} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs active:bg-slate-50">
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="text-2xl font-bold text-slate-900">{b?.pickupTime ? fmt12h(b.pickupTime) : '—'}</span>
@@ -110,7 +161,8 @@ export default function DriverHome() {
   const cv = vehicleOf(d?.currentVehicle);
 
   const active = data.activeTrip;
-  const allUpcoming = [...data.today, ...data.upcoming];
+  // A shared cab already under way isn't listed again under "Next rides".
+  const allUpcoming = groupTrips([...data.today, ...data.upcoming].filter((r) => !(active && isSharedTrip(r) && r.tripId === active.tripId)));
   const visibleNext = showAll ? allUpcoming : allUpcoming.slice(0, 3);
   const doneToday = data.completed.filter((r) => isSameLocalDay(r.completedAt)).length;
   const movedCount = data.cancelledOrReassigned.length;
@@ -149,14 +201,25 @@ export default function DriverHome() {
       {active && active.booking && (
         <section className="rounded-2xl border-2 border-cyan-500 bg-cyan-50 p-4 shadow-sm" aria-label="Current trip">
           <p className="text-sm font-semibold uppercase tracking-wide text-cyan-900">Current trip</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{NEXT_STEP[active.booking.status] ?? 'Trip in progress'}</p>
-          <p className="mt-2 text-base text-slate-800">
-            {active.booking.pickupLocation} <span className="text-slate-400">→</span> {active.booking.dropLocation}
-          </p>
-          <p className="mt-1 text-sm text-slate-600">
-            {active.employee?.name} · {fmt12h(active.booking.pickupTime)} · <span className="font-mono text-xs">{active.booking.reference}</span>
-          </p>
-          <Button size="xl" className="mt-4 h-18 text-xl" onClick={() => navigate(`/driver/rides/${active.assignmentId}`)} icon={<ArrowRight className="h-6 w-6" aria-hidden />}>
+          {isSharedTrip(active) ? (
+            <>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{active.tripName ?? 'Shared cab'}</p>
+              <p className="mt-2 text-base text-slate-800">
+                {active.tripRiders} riders · {fmt12h(active.booking.pickupTime)} · {active.booking.direction === 'IN' ? 'homes → office' : 'office → homes'}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{NEXT_STEP[active.booking.status] ?? 'Trip in progress'}</p>
+              <p className="mt-2 text-base text-slate-800">
+                {active.booking.pickupLocation} <span className="text-slate-400">→</span> {active.booking.dropLocation}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {active.employee?.name} · {fmt12h(active.booking.pickupTime)} · <span className="font-mono text-xs">{active.booking.reference}</span>
+              </p>
+            </>
+          )}
+          <Button size="xl" className="mt-4 h-18 text-xl" onClick={() => navigate(openPath(active))} icon={<ArrowRight className="h-6 w-6" aria-hidden />}>
             Open trip
           </Button>
         </section>
@@ -171,10 +234,8 @@ export default function DriverHome() {
           <section aria-label="Next rides">
             <h2 className="mb-3 text-lg font-bold text-slate-900">Next rides</h2>
             <ul className="space-y-3">
-              {visibleNext.map((r) => (
-                <li key={r.assignmentId}>
-                  <RideCard r={r} />
-                </li>
+              {visibleNext.map((g) => (
+                <li key={g[0].assignmentId}>{g.length > 1 ? <TripCard rides={g} /> : <RideCard r={g[0]} />}</li>
               ))}
             </ul>
             {allUpcoming.length > 3 && (

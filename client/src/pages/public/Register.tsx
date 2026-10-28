@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Input, Select, Spinner, Textarea } from '../../components/ui';
+import { Alert, Button, Input, Select, Spinner } from '../../components/ui';
 import { errorMessage, get, post } from '../../lib/api';
 import { homeFor, useAuth } from '../../lib/auth';
 import { fieldErrors } from '../../lib/hooks';
 import AuthShell from './AuthShell';
+import { AddressPicker, type MapSpot } from '../../components/LocationPicker';
 
 type Context = { email: string; fullName: string; offices: Array<{ code: string; name: string }> };
 
@@ -19,6 +20,7 @@ export default function Register() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [spot, setSpot] = useState<MapSpot>({ link: '', pin: null });
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   useEffect(() => {
@@ -32,7 +34,7 @@ export default function Register() {
     setError('');
     setErrors({});
     try {
-      await post('/auth/sso/register', form);
+      await post('/auth/sso/register', { ...form, ...(spot.pin ? { homeLocation: spot.pin, homeMapLink: spot.link.trim() } : {}) });
       const me = (await refresh()) as { data?: { user: { role: Parameters<typeof homeFor>[0] } } };
       navigate(me.data ? homeFor(me.data.user.role) : '/', { replace: true });
     } catch (err) {
@@ -43,7 +45,8 @@ export default function Register() {
     }
   };
 
-  const complete = Object.values(form).every((v) => v.trim());
+  // Every field, including the home's Google Maps link (so the driver can find the employee).
+  const complete = Object.values(form).every((v) => v.trim()) && !!spot.pin;
 
   return (
     <AuthShell
@@ -76,16 +79,17 @@ export default function Register() {
               ))}
             </Select>
           </div>
-          <Textarea
-            label="Present address"
-            autoComplete="street-address"
-            placeholder="Flat / house no., building, street, area, city, PIN code"
-            value={form.homeAddress}
-            onChange={set('homeAddress')}
+          <AddressPicker
+            address={form.homeAddress}
+            onAddress={(v) => setForm((f) => ({ ...f, homeAddress: v }))}
+            spot={spot}
+            onSpot={setSpot}
+            saved={!spot.pin}
             error={errors.homeAddress}
-            maxLength={300}
             required
             hint="The transport team assigns your cab route from this address."
+            linkPath="/auth/sso/geo/link"
+            mapRequired
           />
           {error && !Object.keys(errors).length && <Alert tone="error">{error}</Alert>}
           <Button type="submit" size="lg" className="w-full" loading={busy} disabled={!complete}>

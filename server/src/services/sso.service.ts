@@ -149,6 +149,9 @@ export const selfRegistrationSchema = z.object({
   officeLocation: z.string().trim().toUpperCase().min(1, 'Office location is required'),
   // Employees give only their address; an admin sets their route (cab) afterwards.
   homeAddress: z.string().trim().min(5, 'Enter your full home address').max(300),
+  // The home's exact spot, from its Google Maps link: required, so the driver can find the employee.
+  homeLocation: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }, { required_error: 'Add your home’s Google Maps link' }),
+  homeMapLink: z.string().trim().min(1, 'Add your home’s Google Maps link').max(2000),
 });
 
 /** What the form needs: the verified identity plus the offices to choose from. */

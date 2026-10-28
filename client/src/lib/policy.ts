@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { get } from './api';
 import { fmt12h } from './format';
 
-export type Office = { code: string; name: string; address?: string; timezone: string; active: boolean };
+export type Office = { code: string; name: string; address?: string; timezone: string; active: boolean; location?: { lat: number; lng: number }; mapLink?: string };
 export type Shift = { code: string; name: string; direction: string; startTime?: string; endTime?: string; defaultPickupTime?: string; active: boolean };
 export type PublicPolicy = {
   officeLocations: Office[];

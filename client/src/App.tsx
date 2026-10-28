@@ -45,6 +45,7 @@ const MyBookingDetail = p(() => import('./pages/employee/MyBookingDetail'));
 // Driver
 const DriverHome = p(() => import('./pages/driver/DriverHome'));
 const DriverRide = p(() => import('./pages/driver/DriverRide'));
+const DriverTrip = p(() => import('./pages/driver/DriverTrip'));
 const DriverHistory = p(() => import('./pages/driver/DriverHistory'));
 
 /** Frontend guard for navigation only; the API enforces authorization on every request. */
@@ -117,6 +118,7 @@ export default function App() {
 
           <Route path="/driver" element={<RequireRole roles={['DRIVER']}><DriverHome /></RequireRole>} />
           <Route path="/driver/rides/:id" element={<RequireRole roles={['DRIVER']}><DriverRide /></RequireRole>} />
+          <Route path="/driver/trips/:tripId" element={<RequireRole roles={['DRIVER']}><DriverTrip /></RequireRole>} />
           <Route path="/driver/history" element={<RequireRole roles={['DRIVER']}><DriverHistory /></RequireRole>} />
         </Route>
         <Route path="*" element={<Home />} />

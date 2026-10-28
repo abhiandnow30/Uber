@@ -74,6 +74,8 @@ export const policyUpdateSchema = z
           name: z.string().trim().min(2).max(100),
           address: z.string().trim().max(300).optional().default(''),
           timezone: z.string().refine(isValidTimezone, 'Invalid IANA time zone'),
+          location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).optional(),
+          mapLink: z.string().trim().max(2000).optional(),
           active: z.boolean().default(true),
         }),
       )

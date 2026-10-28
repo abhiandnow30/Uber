@@ -16,6 +16,7 @@ import { bookingEmailParams, notifyCoordinators, recordEvent, transitionBooking 
 import { enqueueEmail, notifyInApp } from './notification.service.js';
 import { assertBookingInScope } from './scope.service.js';
 import { formatInZone } from '../utils/time.js';
+import { getOffice } from './policy.service.js';
 
 async function currentDriver(actor: Actor) {
   if (actor.role !== 'DRIVER') throw forbidden();
@@ -57,10 +58,14 @@ function rideView(a: Record<string, unknown>, b: Record<string, unknown> | null,
     endReason: a.endReason,
     scheduledPickupAt: a.scheduledPickupAt,
     vehicle: a.vehicle,
+    // The shared cab this ride is part of (several riders assigned together as one trip).
+    tripId: a.tripId ?? null,
+    tripName: a.tripName ?? null,
     booking: b
       ? {
           _id: b._id, reference: b.reference, status: b.status, travelDate: b.travelDate, pickupTime: b.pickupTime, timezone: b.timezone,
           pickupLocation: b.pickupLocation, dropLocation: b.dropLocation, passengers: b.passengers, notes: b.notes, isDelayed: b.isDelayed,
+          direction: (b.direction as string | undefined) ?? 'OUT',
         }
       : null,
     employee: employee ? { name: employee.fullName } : null,
@@ -82,10 +87,14 @@ export async function driverHome(actor: Actor) {
     .lean();
   const empIds = assignments.map((a) => (a.booking as unknown as { employee: unknown })?.employee).filter(Boolean);
   const employees = new Map((await Employee.find({ _id: { $in: empIds } }, { fullName: 1 }).lean()).map((e) => [String(e._id), e]));
-  const views = assignments.map((a) => {
+  const rawViews = assignments.map((a) => {
     const b = a.booking as unknown as Record<string, unknown>;
     return rideView(a as unknown as Record<string, unknown>, b, employees.get(String(b?.employee)));
   });
+  // How many riders are in each shared cab still on, so the app shows a shared cab as one trip.
+  const riders = new Map<string, number>();
+  for (const v of rawViews) if (v.tripId && v.assignmentStatus === 'ACTIVE') riders.set(String(v.tripId), (riders.get(String(v.tripId)) ?? 0) + 1);
+  const views = rawViews.map((v) => ({ ...v, tripRiders: v.tripId ? (riders.get(String(v.tripId)) ?? 0) : 0 }));
   const endOfToday = new Date(now.getTime() + 18 * 3600_000);
   const active = views.find((v) => v.assignmentStatus === 'ACTIVE' && ['DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'].includes(String(v.booking?.status)));
   const upcomingAll = views.filter((v) => v.assignmentStatus === 'ACTIVE' && v.booking?.status === 'ASSIGNED');
@@ -111,15 +120,137 @@ export async function driverRideHistory(actor: Actor, page = 1, pageSize = 20) {
   return { items: items.map((a) => rideView(a as unknown as Record<string, unknown>, a.booking as unknown as Record<string, unknown>)), total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
 }
 
+type Point = { lat: number; lng: number };
+type StoredPoint = { lat?: number | null; lng?: number | null } | null | undefined;
+const pointOf = (p: StoredPoint): Point | null => (typeof p?.lat === 'number' && typeof p?.lng === 'number' ? { lat: p.lat, lng: p.lng } : null);
+
+/**
+ * Exact pickup and drop spots for navigation: the office's pin (Settings) and the employee's home pin,
+ * in the ride's direction (IN: home → office, OUT: office → home). Missing pins stay null and the
+ * driver's app navigates by the address text instead.
+ */
+async function ridePoints(booking: { officeLocation: string; direction?: string | null }, home: StoredPoint) {
+  const officeAt = pointOf((await getOffice(booking.officeLocation))?.location);
+  const homeAt = pointOf(home);
+  return booking.direction === 'IN' ? { pickupPoint: homeAt, dropPoint: officeAt } : { pickupPoint: officeAt, dropPoint: homeAt };
+}
+
 export async function driverRide(actor: Actor, assignmentId: string) {
   const { assignment, booking } = await myAssignment(actor, assignmentId);
+  return rideDetail(assignment, booking);
+}
+
+/** Distance between two pins, in km (flat-earth approximation; exact enough within a city). */
+const km = (a: Point, b: Point) => {
+  const dLat = (a.lat - b.lat) * 111.32;
+  const dLng = (a.lng - b.lng) * 111.32 * Math.cos(((a.lat + b.lat) / 2) * (Math.PI / 180));
+  return Math.hypot(dLat, dLng);
+};
+
+/**
+ * The suggested order of a shared cab's homes: from the office, each next stop is the home nearest
+ * to the previous one, so the cab never doubles back. Office → homes drops in that order; homes →
+ * office picks up in the reverse order, so the cab ends at the office. Homes without a pin go last.
+ */
+export function suggestStops<T>(items: T[], homeOf: (t: T) => Point | null, office: Point | null, toOffice: boolean): T[] {
+  if (!office) return items;
+  const left = items.filter((t) => homeOf(t));
+  const route: T[] = [];
+  let from = office;
+  while (left.length) {
+    let best = 0;
+    left.forEach((t, i) => {
+      if (km(from, homeOf(t)!) < km(from, homeOf(left[best])!)) best = i;
+    });
+    const [next] = left.splice(best, 1);
+    route.push(next);
+    from = homeOf(next)!;
+  }
+  return [...(toOffice ? route.reverse() : route), ...items.filter((t) => !homeOf(t))];
+}
+
+/**
+ * A shared cab as one trip for its driver: every rider assigned to this driver in it, in stop order.
+ * The order is the driver's own when they've changed it, otherwise the suggested one (suggestStops).
+ * Each rider keeps their own ride (PIN, status, notifications); the trip screen acts on them together.
+ */
+export async function driverTrip(actor: Actor, tripId: string) {
+  const driver = await currentDriver(actor);
+  const since = new Date(Date.now() - 3 * 24 * 3600_000);
+  const assignments = await CabAssignment.find({ driver: driver._id, tripId, $or: [{ status: 'ACTIVE' }, { updatedAt: { $gt: since } }] }).sort({ scheduledPickupAt: 1, createdAt: 1 });
+  if (!assignments.length) throw notFound('Trip');
+  const bookings = new Map((await CabRequest.find({ _id: { $in: assignments.map((a) => a.booking) } })).map((b) => [String(b._id), b]));
+  const rides = (await Promise.all(assignments.map((a) => (bookings.get(String(a.booking)) ? rideDetail(a, bookings.get(String(a.booking))!) : null)))).filter((r) => r !== null);
+  const firstBooking = bookings.get(String(assignments[0].booking));
+  const toOffice = firstBooking?.direction === 'IN';
+  const office = pointOf((await getOffice(firstBooking?.officeLocation))?.location);
+  const suggested = suggestStops(rides, (r) => (toOffice ? r.pickupPoint : r.dropPoint), office, toOffice);
+  // The driver's own order (stopOrder) wins; riders they haven't placed keep the suggested order after.
+  const stopOrder = new Map(assignments.map((a) => [String(a._id), a.stopOrder ?? null]));
+  const ordered = suggested
+    .map((r, i) => ({ r, i, own: stopOrder.get(String(r.assignmentId)) }))
+    .sort((x, y) => (x.own ?? Infinity) - (y.own ?? Infinity) || x.i - y.i)
+    .map((x) => x.r);
+  return { tripId, tripName: assignments[0].tripName ?? 'Shared cab', direction: toOffice ? 'IN' : 'OUT', rides: ordered };
+}
+
+/**
+ * For an employee: whether their cab is shared, how many ride in it, and their own place in the
+ * stops, in the same order the driver sees (the driver's own order, else the suggested one). It
+ * says nothing about who the other riders are.
+ */
+export async function sharedCabFor(assignmentId: unknown) {
+  const mine = await CabAssignment.findById(assignmentId, { tripId: 1, tripName: 1 }).lean();
+  if (!mine?.tripId) return null;
+  const assignments = await CabAssignment.find({ tripId: mine.tripId, status: 'ACTIVE' }, { booking: 1, stopOrder: 1, createdAt: 1 }).sort({ createdAt: 1 }).lean();
+  if (assignments.length < 2) return null;
+  const bookings = await CabRequest.find({ _id: { $in: assignments.map((a) => a.booking) } }, { employee: 1, direction: 1, officeLocation: 1, pickupLocation: 1, dropLocation: 1 }).lean();
+  const homes = new Map((await Employee.find({ _id: { $in: bookings.map((b) => b.employee) } }, { homeLocation: 1 }).lean()).map((e) => [String(e._id), pointOf(e.homeLocation)]));
+  const homeOfBooking = new Map(bookings.map((b) => [String(b._id), homes.get(String(b.employee)) ?? null]));
+  const toOffice = bookings[0]?.direction === 'IN';
+  const office = pointOf((await getOffice(bookings[0]?.officeLocation))?.location);
+  const order = suggestStops(assignments, (a) => homeOfBooking.get(String(a.booking)) ?? null, office, toOffice)
+    .map((a, i) => ({ a, i }))
+    .sort((x, y) => (x.a.stopOrder ?? Infinity) - (y.a.stopOrder ?? Infinity) || x.i - y.i)
+    .map((x) => String(x.a._id));
+  // The whole route for everyone in the cab (the company's choice): the office and every home, in stop
+  // order, as exact spots where pinned and address text otherwise.
+  const byId = new Map(assignments.map((a) => [String(a._id), bookings.find((b) => String(b._id) === String(a.booking))]));
+  const at = (p: Point | null, text?: string | null) => (p ? `${p.lat},${p.lng}` : (text ?? ''));
+  const homesInOrder = order.map((id) => {
+    const b = byId.get(id);
+    return at(homeOfBooking.get(String(b?._id)) ?? null, toOffice ? b?.pickupLocation : b?.dropLocation);
+  });
+  const officeStop = at(office, toOffice ? bookings[0]?.dropLocation : bookings[0]?.pickupLocation);
+  const route = (toOffice ? [...homesInOrder, officeStop] : [officeStop, ...homesInOrder]).filter(Boolean);
+  return { name: mine.tripName ?? 'Shared cab', riders: assignments.length, stop: order.indexOf(String(assignmentId)) + 1, direction: toOffice ? 'IN' : 'OUT', route };
+}
+
+/** The driver puts the riders of their shared cab in the order they'll pick up / drop them. */
+export async function reorderTrip(actor: Actor, tripId: string, assignmentIds: string[]) {
+  const driver = await currentDriver(actor);
+  const mine = await CabAssignment.find({ driver: driver._id, tripId, status: 'ACTIVE' }, { _id: 1 }).lean();
+  const ids = new Set(mine.map((a) => String(a._id)));
+  if (!mine.length) throw notFound('Trip');
+  if (assignmentIds.length !== ids.size || assignmentIds.some((id) => !ids.has(id))) {
+    throw new AppError(409, 'TRIP_CHANGED', 'The riders in this cab changed. Refresh and try again.');
+  }
+  await CabAssignment.bulkWrite(assignmentIds.map((id, i) => ({ updateOne: { filter: { _id: id }, update: { $set: { stopOrder: i } } } })));
+  await audit(actor, 'TRIP_REORDERED', 'CabAssignment', assignmentIds[0], `Driver ${driver.driverCode} changed the stop order`, { tripId });
+  return driverTrip(actor, tripId);
+}
+
+async function rideDetail(assignment: InstanceType<typeof CabAssignment>, booking: CabRequestDoc) {
   const [vehicle, employee, cred] = await Promise.all([
     mongoose.model('Vehicle').findById(assignment.vehicle).select('registrationNumber model capacity').lean(),
-    Employee.findById(booking.employee, { fullName: 1 }).lean(),
+    Employee.findById(booking.employee, { fullName: 1, homeLocation: 1 }).lean(),
     RideStartCredential.findOne({ assignment: assignment._id }).sort({ createdAt: -1 }).select('status attempts maxAttempts expiresAt').lean(),
   ]);
+  // The home's exact spot is personal: the driver gets it only while the ride is theirs and still on.
+  const points = assignment.status === 'ACTIVE' ? await ridePoints(booking, employee?.homeLocation) : { pickupPoint: null, dropPoint: null };
   return {
     ...rideView({ ...assignment.toObject(), vehicle } as unknown as Record<string, unknown>, booking.toObject() as unknown as Record<string, unknown>, employee),
+    ...points,
     // PIN state only (never the PIN): lets the driver know remaining attempts.
     pin: cred ? { status: cred.status, attemptsRemaining: Math.max(0, cred.maxAttempts - cred.attempts), expiresAt: cred.expiresAt } : null,
     driverNotes: assignment.driverNotes,

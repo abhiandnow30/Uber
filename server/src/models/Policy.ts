@@ -6,6 +6,12 @@ const officeSchema = new Schema(
     name: { type: String, required: true, trim: true },
     address: { type: String, trim: true },
     timezone: { type: String, required: true }, // IANA, e.g. Asia/Kolkata
+    // The Google Maps link of the office, and the exact spot taken from it.
+    mapLink: { type: String, trim: true, maxlength: 2000 },
+    location: {
+      type: new Schema({ lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } }, { _id: false }),
+      default: undefined,
+    },
     active: { type: Boolean, default: true },
   },
   { _id: false },

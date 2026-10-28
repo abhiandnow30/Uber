@@ -7,6 +7,7 @@ import { ApiError, get, post } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 import { pickupLabel } from '../../lib/policy';
 import { CancelRideDialog } from './CancelRideDialog';
+import { RideRouteLink } from '../../components/RideRouteLink';
 
 type HistoryEntry = { _id: string; from?: string; to: string; event: string; reason?: string; actorRole?: string; createdAt: string };
 
@@ -180,7 +181,7 @@ export default function MyBookingDetail() {
           </Card>
         )}
 
-        <Card title="Trip details">
+        <Card title="Trip details" actions={<RideRouteLink ride={b} />}>
           <DescriptionList
             items={[
               ['Date', fmtTravelDate(b.travelDate)],

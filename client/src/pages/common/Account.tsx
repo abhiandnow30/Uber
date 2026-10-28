@@ -8,6 +8,7 @@ import { fmtDateTime, humanize } from '../../lib/format';
 import { fmt12h, usePolicy } from '../../lib/policy';
 import { useSsoConfig } from '../../lib/sso';
 import { useUnsavedChanges } from '../../lib/unsaved';
+import { MapLinkField, sameSpot, type LatLng, type MapSpot } from '../../components/LocationPicker';
 import { PasswordFields, passwordOk } from '../public/Activate';
 
 export default function Account() {
@@ -92,22 +93,33 @@ function CabDetailsCard() {
   const { me, refresh } = useAuth();
   const toast = useToast();
   const { data: policy } = usePolicy();
-  const profile = (me?.profile ?? {}) as { defaultShift?: string; homeAddress?: string };
+  const profile = (me?.profile ?? {}) as { defaultShift?: string; homeAddress?: string; homeLocation?: LatLng | null; homeMapLink?: string };
   const savedShift = profile.defaultShift ?? '';
   const savedAddress = profile.homeAddress ?? '';
+  const savedSpot: MapSpot = { link: profile.homeMapLink ?? '', pin: profile.homeLocation ? { lat: profile.homeLocation.lat, lng: profile.homeLocation.lng } : null };
   const [shift, setShift] = useState(savedShift);
   const [address, setAddress] = useState(savedAddress);
+  const [spot, setSpot] = useState<MapSpot>(savedSpot);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   useEffect(() => setShift(savedShift), [savedShift]);
   useEffect(() => setAddress(savedAddress), [savedAddress]);
+  // After a save (or a change elsewhere) the form follows the saved location.
+  const savedSpotKey = JSON.stringify(savedSpot);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setSpot(savedSpot), [savedSpotKey]);
   const shifts = policy?.shifts.filter((s) => s.active) ?? [];
 
   const shiftChanged = shift !== savedShift;
   const addressChanged = address.trim() !== savedAddress;
+  const pinChanged = !sameSpot(spot, savedSpot);
   const addressOk = address.trim().length >= 5 || (!addressChanged && !savedAddress);
 
   const save = async (): Promise<boolean> => {
+    if (!spot.pin) {
+      setErrors({ form: 'Add your home’s Google Maps link before saving.' });
+      return false;
+    }
     if (!addressOk) {
       setErrors({ homeAddress: 'Enter your full present address' });
       return false;
@@ -115,7 +127,11 @@ function CabDetailsCard() {
     setBusy(true);
     setErrors({});
     try {
-      await patch('/me/profile', { ...(shiftChanged ? { defaultShift: shift } : {}), ...(addressChanged ? { homeAddress: address.trim() } : {}) });
+      await patch('/me/profile', {
+        ...(shiftChanged ? { defaultShift: shift } : {}),
+        ...(addressChanged ? { homeAddress: address.trim() } : {}),
+        ...(pinChanged ? { homeLocation: spot.pin, homeMapLink: spot.pin ? spot.link.trim() : '' } : {}),
+      });
       await refresh();
       toast.success('Cab details saved', 'Your shift is selected and your address is used when you request a cab.');
       return true;
@@ -131,7 +147,7 @@ function CabDetailsCard() {
     e.preventDefault();
     void save();
   };
-  useUnsavedChanges(shiftChanged || addressChanged, save);
+  useUnsavedChanges(shiftChanged || addressChanged || pinChanged, save);
 
   return (
     <Card
@@ -166,7 +182,8 @@ function CabDetailsCard() {
           You can pick a different shift or cab time for a single ride on the request form. Your address is used as the pickup or drop-off of your rides, so the transport team and your driver see it on those rides.
         </p>
         {errors.form && <Alert tone="error">{errors.form}</Alert>}
-        <Button type="submit" loading={busy} disabled={(!shiftChanged && !addressChanged) || !addressOk}>
+        <MapLinkField spot={spot} onSpot={setSpot} saved={!pinChanged} required />
+        <Button type="submit" loading={busy} disabled={(!shiftChanged && !addressChanged && !pinChanged) || !addressOk || !spot.pin}>
           Save
         </Button>
       </form>
