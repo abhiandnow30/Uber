@@ -1,5 +1,5 @@
 import type { TxContext } from '../db.js';
-import { canTransitionBooking, type BookingStatus } from '../domain.js';
+import { canTransitionBooking, TERMINAL_STATUSES, type BookingStatus } from '../domain.js';
 import { CabRequest, TripStatusHistory, type CabRequestDoc } from '../models/booking.js';
 import { Coordinator } from '../models/Coordinator.js';
 import { User } from '../models/User.js';
@@ -24,7 +24,8 @@ export async function transitionBooking(
   for (const f of from) {
     if (!canTransitionBooking(f, to)) throw new Error(`Programming error: ${f} → ${to} is not an allowed transition`);
   }
-  const update: Record<string, unknown> = { $set: { status: to, ...(opts.set ?? {}) } };
+  // A finished ride (cancelled, completed...) is no longer running late.
+  const update: Record<string, unknown> = { $set: { status: to, ...(TERMINAL_STATUSES.includes(to) ? { isDelayed: false } : {}), ...(opts.set ?? {}) } };
   if (opts.unset?.length) update.$unset = Object.fromEntries(opts.unset.map((k) => [k, 1]));
   const updated = await CabRequest.findOneAndUpdate({ _id: bookingId, status: { $in: from } }, update, { new: true, session: tx.session });
   if (!updated) {

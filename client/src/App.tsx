@@ -27,7 +27,6 @@ const Admins = p(() => import('./pages/admin/Admins'));
 const PolicyPage = p(() => import('./pages/admin/Policy'));
 const Reports = p(() => import('./pages/admin/Reports'));
 const Audit = p(() => import('./pages/admin/Audit'));
-const EmailDelivery = p(() => import('./pages/admin/EmailDelivery'));
 // Operations (coordinator + admin)
 const OpsDashboard = p(() => import('./pages/ops/OpsDashboard'));
 const Bookings = p(() => import('./pages/ops/Bookings'));
@@ -99,7 +98,6 @@ export default function App() {
           <Route path="/admin/policy" element={<RequireRole roles={ADMIN}><PolicyPage /></RequireRole>} />
           <Route path="/admin/reports" element={<RequireRole roles={ADMIN}><Reports /></RequireRole>} />
           <Route path="/admin/audit" element={<RequireRole roles={ADMIN}><Audit /></RequireRole>} />
-          <Route path="/admin/notifications" element={<RequireRole roles={ADMIN}><EmailDelivery /></RequireRole>} />
 
           <Route path="/ops" element={<RequireRole roles={OPS}><OpsDashboard /></RequireRole>} />
           <Route path="/ops/bookings" element={<RequireRole roles={OPS}><Bookings /></RequireRole>} />

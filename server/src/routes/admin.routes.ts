@@ -6,14 +6,13 @@ import { body, objectId, query } from '../middleware/common.js';
 import { Coordinator } from '../models/Coordinator.js';
 import { Driver } from '../models/Driver.js';
 import { Employee } from '../models/Employee.js';
-import { AuditLog, EmailOutbox } from '../models/system.js';
+import { AuditLog } from '../models/system.js';
 import { User } from '../models/User.js';
 import { setAccountStatus } from '../services/account.service.js';
 import { adminSchema, createAdmin, deleteAdmin, getAdminUserId, listAdmins } from '../services/admin.service.js';
 import { audit } from '../services/audit.service.js';
 import { issueActivation } from '../services/auth.service.js';
 import { coordinatorSchema, createCoordinator, deleteCoordinator, getCoordinator, listCoordinators, updateCoordinator } from '../services/coordinator.service.js';
-import { retryOutboxMessage } from '../services/email/outbox.worker.js';
 import {
   createEmployee,
   deleteEmployee,
@@ -234,26 +233,4 @@ adminRouter.get('/audit', async (req, res) => {
   res.json(paged(items, total, p));
 });
 
-// ---------------------------------------------------------------------------
-// Email outbox (failed notifications view)
-// ---------------------------------------------------------------------------
-adminRouter.get('/outbox', async (req, res) => {
-  const p = query(paginationSchema, req);
-  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-  const filter: Record<string, unknown> = status ? { status: { $in: status.split(',') } } : {};
-  if (p.q) filter.to = new RegExp(escapeRegex(p.q), 'i');
-  const [items, total, counts] = await Promise.all([
-    EmailOutbox.find(filter).sort({ createdAt: -1 }).skip((p.page - 1) * p.pageSize).limit(p.pageSize).select('-params').populate('relatedBooking', 'reference').lean(),
-    EmailOutbox.countDocuments(filter),
-    EmailOutbox.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
-  ]);
-  res.json({ ...paged(items, total, p), counts: Object.fromEntries(counts.map((c) => [c._id, c.n])) });
-});
-
-adminRouter.post('/outbox/:id/retry', async (req, res) => {
-  const job = await retryOutboxMessage(objectId(req.params.id, 'Message'));
-  if (!job) throw new AppError(409, 'INVALID_STATE', 'Only failed messages can be retried');
-  await audit(actorFromRequest(req), 'EMAIL_RETRY', 'EmailOutbox', job._id, `Retry requested for ${job.template} to ${job.to}`);
-  res.json({ ok: true });
-});
 

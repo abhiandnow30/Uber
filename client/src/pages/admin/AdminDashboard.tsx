@@ -25,7 +25,6 @@ type Dashboard = {
     delayed: number;
     byStatus: Record<string, number>;
   };
-  failedEmails: number;
   cancellationRequests: number;
   recentActivity: Array<{ _id: string; action: string; summary?: string; actorEmail?: string; actorRole?: string; createdAt: string }>;
 };
@@ -61,8 +60,6 @@ export default function AdminDashboard() {
         action: 'Review',
         to: `/ops/bookings${qs({ date: 'all', status: 'ALL', cancellationRequested: 'true' })}`,
       });
-    if (data.failedEmails > 0)
-      attention.push({ key: 'emails', text: `${plural(data.failedEmails, 'email', 'emails')} could not be sent`, action: 'See emails', to: '/admin/notifications?status=FAILED' });
     if (data.employees.invited > 0)
       attention.push({ key: 'invited', text: `${plural(data.employees.invited, 'invited employee has', 'invited employees have')} not activated their account yet`, action: 'View', to: '/admin/employees?status=INVITED' });
   }

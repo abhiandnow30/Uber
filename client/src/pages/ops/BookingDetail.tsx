@@ -19,7 +19,6 @@ import {
   type Column,
 } from '../../components/ui';
 import { get, post } from '../../lib/api';
-import { useAuth } from '../../lib/auth';
 import { fmt12h, fmtDateTime, fmtRelative, fmtTravelDate, humanize, mapsDirectionsUrl } from '../../lib/format';
 import { ASSIGNABLE, AssignModal, REASSIGNABLE, type AssignTarget } from './Bookings';
 
@@ -63,16 +62,6 @@ type HistoryRow = {
   actor?: Person;
   actorRole?: string;
   reason?: string;
-  createdAt: string;
-};
-type EmailRow = {
-  _id: string;
-  template: string;
-  to: string;
-  status: string;
-  attempts: number;
-  lastError?: string;
-  acceptedAt?: string;
   createdAt: string;
 };
 type BookingDetailData = {
@@ -122,7 +111,6 @@ type BookingDetailData = {
   };
   assignments: Assignment[];
   history: HistoryRow[];
-  emails: EmailRow[];
   pinState: {
     status: string;
     attempts: number;
@@ -160,7 +148,6 @@ function Step({ label, at, tz }: { label: string; at?: string; tz?: string }) {
 
 export default function BookingDetail() {
   const { id = '' } = useParams();
-  const isAdmin = useAuth().me?.user.role === 'ADMIN';
   const qc = useQueryClient();
   const toast = useToast();
   const [action, setAction] = useState<ActionKey | null>(null);
@@ -382,35 +369,6 @@ export default function BookingDetail() {
         ) : (
           '—'
         ),
-    },
-  ];
-  const emailCols: Column<EmailRow>[] = [
-    {
-      key: 'when',
-      header: 'Queued',
-      render: (e) => <span className="whitespace-nowrap">{fmtDateTime(e.createdAt, tz)}</span>,
-    },
-    { key: 'tpl', header: 'Template', render: (e) => humanize(e.template) },
-    {
-      key: 'to',
-      header: 'To',
-      render: (e) => <span className="whitespace-nowrap">{e.to}</span>,
-    },
-    {
-      key: 'status',
-      header: 'Status',
-      render: (e) => <StatusBadge status={e.status} />,
-    },
-    {
-      key: 'att',
-      header: 'Attempts',
-      render: (e) => e.attempts,
-      className: 'text-center',
-    },
-    {
-      key: 'err',
-      header: 'Last error',
-      render: (e) => (e.lastError ? <span className="text-xs text-red-700">{e.lastError}</span> : '—'),
     },
   ];
 
@@ -672,12 +630,6 @@ export default function BookingDetail() {
               </ol>
             )}
           </Card>
-          {isAdmin && (
-            <Card title="Email notifications">
-              <p className="mb-3 text-xs text-slate-500">“Sent (accepted)” means the mail provider accepted the message; it is not proof of delivery.</p>
-              <DataTable columns={emailCols} rows={b.emails} rowKey={(e) => e._id} empty={<EmptyState title="No emails for this booking" />} />
-            </Card>
-          )}
         </div>
       </div>
 

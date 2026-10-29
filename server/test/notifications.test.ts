@@ -39,19 +39,15 @@ describe('email outbox', () => {
     expect(msg!.attempts).toBe(2);
   });
 
-  it('permanent failures are marked FAILED, alert the admins, and can be retried by an admin', async () => {
+  it('permanent failures are marked FAILED without alerting anyone in the app', async () => {
     const admin = await makeAdmin();
     await enqueueEmail(null, { idempotencyKey: 'k2', template: 'TRIP_COMPLETED', to: 'bad@test.com', params: { name: 'A' } });
     fakeEmail.failures.push('permanent');
     await processOutboxBatch();
     const msg = await EmailOutbox.findOne({ idempotencyKey: 'k2' });
     expect(msg!.status).toBe('FAILED');
-    expect(await Notification.exists({ user: admin.user._id, type: 'EMAIL_FAILED' })).toBeTruthy();
-    const list = await admin.client.get('/api/admin/outbox?status=FAILED');
-    expect(list.body.total).toBe(1);
-    await admin.client.post(`/api/admin/outbox/${msg!._id}/retry`).expect(200);
-    await processOutboxBatch();
-    expect((await EmailOutbox.findById(msg!._id))!.status).toBe('ACCEPTED');
+    expect(await Notification.exists({ user: admin.user._id })).toBeFalsy();
+    await admin.client.get('/api/admin/outbox').expect(404);
   });
 
   it('exhausting retries marks the message FAILED', async () => {

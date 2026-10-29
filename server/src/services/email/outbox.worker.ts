@@ -2,7 +2,6 @@ import { logger } from '../../logger.js';
 import { EmailOutbox } from '../../models/system.js';
 import { decrypt } from '../../utils/crypto.js';
 import { metrics } from '../../metrics.js';
-import { alertOperations } from '../alert.service.js';
 import { EmailSendError, getEmailProvider } from './providers.js';
 import { renderEmail, type EmailTemplate } from './templates.js';
 
@@ -82,26 +81,9 @@ export async function processOutboxBatch(limit = 20): Promise<number> {
         },
       );
       metrics.inc(willRetry ? 'emails_retried_total' : 'emails_failed_total');
+      // Failed emails are only logged for whoever runs the server; they aren't shown to anyone in the app.
       logger.warn({ outboxId: String(job._id), template: job.template, transient, willRetry }, 'Email send failed');
-      if (!willRetry) {
-        await alertOperations({
-          type: 'EMAIL_FAILED',
-          message: `Email "${job.template}" to ${job.to} failed after ${job.attempts} attempt(s): ${message.slice(0, 200)}`,
-          bookingId: job.relatedBooking ? String(job.relatedBooking) : undefined,
-          dedupeKey: `EMAIL_FAILED:${job._id}`,
-        });
-      }
     }
   }
   return processed;
-}
-
-/** Admin action: requeue a failed message. */
-export async function retryOutboxMessage(id: string) {
-  const res = await EmailOutbox.findOneAndUpdate(
-    { _id: id, status: 'FAILED' },
-    { $set: { status: 'PENDING', nextAttemptAt: new Date(), attempts: 0, lastError: null } },
-    { new: true },
-  );
-  return res;
 }

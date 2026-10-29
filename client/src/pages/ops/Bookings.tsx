@@ -65,7 +65,6 @@ export type BookingRow = {
   assignment?: { _id?: string; acknowledgedAt?: string; status?: string; tripId?: string; tripName?: string };
   driver?: { _id: string; fullName: string; driverCode: string; phone?: string } | null;
   vehicle?: { _id: string; registrationNumber: string; capacity?: number } | null;
-  notification?: { status: string; lastError?: string; acceptedAt?: string; attempts?: number } | null;
 };
 
 /** Minimal trip info shown at the top of the assignment modal. */
@@ -1168,11 +1167,6 @@ export default function Bookings({ history = false }: { history?: boolean }) {
               Wants to cancel
             </Pill>
           )}
-          {b.notification?.status === 'FAILED' && (
-            <Pill tone="red" title={b.notification.lastError}>
-              Email not sent
-            </Pill>
-          )}
         </div>
       ),
     },
@@ -1562,7 +1556,8 @@ function RideGroups({
                 )}
               </div>
               <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
-                <span className="hidden sm:inline">{[...g.times.values()].map((list) => `${list[0].direction === 'IN' ? 'IN' : 'OUT'} ${fmt12h(groupTime(list[0]))}`).join(' · ')}</span>
+                {/* One time is already in the header line below; list times here only when the cab has several. */}
+                {g.times.size > 1 && <span className="hidden sm:inline">{[...g.times.values()].map((list) => `${list[0].direction === 'IN' ? 'IN' : 'OUT'} ${fmt12h(groupTime(list[0]))}`).join(' · ')}</span>}
                 {g.tripId && onRename && (
                   <Button size="sm" variant="ghost" onClick={() => onRename(g.tripId!, g.label)}>
                     Rename

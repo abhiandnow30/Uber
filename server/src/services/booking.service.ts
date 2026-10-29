@@ -9,7 +9,6 @@ import { CabAssignment, CabRequest, RideStartCredential, TripStatusHistory } fro
 import { nextSequence } from '../models/Counter.js';
 import { Driver } from '../models/Driver.js';
 import { Employee } from '../models/Employee.js';
-import { EmailOutbox } from '../models/system.js';
 import { User } from '../models/User.js';
 import { decrypt } from '../utils/crypto.js';
 import { AppError, badRequest, forbidden, notFound, validationError } from '../utils/errors.js';
@@ -723,17 +722,6 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
     { $lookup: { from: 'drivers', localField: 'asg.driver', foreignField: '_id', as: 'drv', pipeline: [{ $project: { fullName: 1, driverCode: 1, phone: 1 } }] } },
     { $lookup: { from: 'vehicles', localField: 'asg.vehicle', foreignField: '_id', as: 'veh', pipeline: [{ $project: { registrationNumber: 1, capacity: 1 } }] } },
     {
-      $lookup: {
-        from: 'emailoutboxes',
-        let: { aid: '$currentAssignment' },
-        pipeline: [
-          { $match: { $expr: { $and: [{ $ne: ['$$aid', null] }, { $in: ['$idempotencyKey', [{ $concat: ['cab-assigned:', { $toString: '$$aid' }] }, { $concat: ['assignment-changed:', { $toString: '$$aid' }] }]] }] } } },
-          { $project: { status: 1, lastError: 1, acceptedAt: 1, attempts: 1 } },
-        ],
-        as: 'mail',
-      },
-    },
-    {
       $facet: {
         items: [
           { $sort: sort },
@@ -748,7 +736,6 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
               assignment: { _id: '$asg._id', acknowledgedAt: '$asg.acknowledgedAt', status: '$asg.status', tripId: '$asg.tripId', tripName: '$asg.tripName' },
               driver: { $first: '$drv' },
               vehicle: { $first: '$veh' },
-              notification: { $first: '$mail' },
             },
           },
         ],
@@ -757,8 +744,6 @@ export async function listBookings(actor: Actor, p: Pagination, f: z.infer<typeo
     },
   );
   const [res] = await CabRequest.aggregate(pipeline);
-  // Email delivery is for admins only.
-  if (actor.role !== 'ADMIN') for (const i of res.items) delete i.notification;
   return paged(res.items, res.total[0]?.n ?? 0, p);
 }
 
@@ -767,15 +752,13 @@ export async function getBookingForOperations(actor: Actor, id: string) {
   const booking = await CabRequest.findById(id).populate('employee', 'fullName employeeId email phone officeLocation').lean();
   if (!booking) throw notFound('Booking');
   await assertBookingInScope(actor, booking);
-  const [assignments, history, emails, pinState] = await Promise.all([
+  const [assignments, history, pinState] = await Promise.all([
     CabAssignment.find({ booking: booking._id }).sort({ createdAt: -1 }).populate('driver', 'fullName driverCode phone').populate('vehicle', 'registrationNumber model capacity').populate('assignedBy', 'name').lean(),
     TripStatusHistory.find({ booking: booking._id }).sort({ createdAt: 1 }).populate('actor', 'name').lean(),
-    // Emails are shown to admins only.
-    actor.role !== 'ADMIN' ? [] : EmailOutbox.find({ relatedBooking: booking._id }).sort({ createdAt: -1 }).select('template to status attempts lastError acceptedAt createdAt provider').lean(),
     booking.currentAssignment ? RideStartCredential.findOne({ assignment: booking.currentAssignment }).sort({ createdAt: -1 }).select('status attempts maxAttempts expiresAt usedAt').lean() : null,
   ]);
-  // Coordinators never see the PIN itself, only its state.
-  return { ...booking, assignments, history, emails, pinState };
+  // Coordinators never see the PIN itself, only its state. Email delivery isn't shown to anyone.
+  return { ...booking, assignments, history, pinState };
 }
 
 export async function approveBooking(actor: Actor, id: string) {

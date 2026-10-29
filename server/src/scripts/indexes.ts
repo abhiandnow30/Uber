@@ -81,6 +81,10 @@ export async function syncIndexes() {
   // Drivers no longer accept rides (assigned means theirs): mark older open assignments accepted.
   await mongoose.connection.db!.collection('cabassignments').updateMany({ status: 'ACTIVE', acknowledgedAt: null }, [{ $set: { acknowledgedAt: '$createdAt' } }]);
 
+  // Finished rides are no longer late, and failed-email alerts aren't shown to anyone any more.
+  await bookings.updateMany({ isDelayed: true, status: { $in: ['COMPLETED', 'CANCELLED', 'REJECTED', 'NO_SHOW'] } }, { $set: { isDelayed: false } });
+  await mongoose.connection.db!.collection('notifications').deleteMany({ type: 'EMAIL_FAILED' });
+
   // Drivers saved before mobile sign-in existed have no phoneKey yet.
   const drivers = mongoose.model('Driver');
   for (const d of await drivers.find({ phoneKey: { $exists: false } }, { phone: 1 }).lean<Array<{ _id: unknown; phone?: string }>>()) {

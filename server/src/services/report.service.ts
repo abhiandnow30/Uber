@@ -4,7 +4,7 @@ import { CabAssignment, CabRequest } from '../models/booking.js';
 import { Coordinator } from '../models/Coordinator.js';
 import { Driver } from '../models/Driver.js';
 import { Employee } from '../models/Employee.js';
-import { AuditLog, EmailOutbox } from '../models/system.js';
+import { AuditLog } from '../models/system.js';
 import { User } from '../models/User.js';
 import { Vehicle } from '../models/Vehicle.js';
 import { badRequest } from '../utils/errors.js';
@@ -49,7 +49,7 @@ export async function adminDashboard(q: z.infer<typeof dashboardQuerySchema>) {
   const officeMatch = office ? { officeLocation: office } : {};
   const [
     totalEmployees, employeeStatus, activeCoordinators, activeVerifiedDrivers, totalVehicles, activeVehicles,
-    busyVehicleIds, bookings, failedEmails, recentActivity, delayed, cancellationRequests,
+    busyVehicleIds, bookings, recentActivity, delayed, cancellationRequests,
   ] = await Promise.all([
     Employee.countDocuments({ ...officeMatch, deletedAt: null }),
     Employee.aggregate([{ $match: { ...officeMatch, deletedAt: null } }, { $lookup: { from: 'users', localField: 'user', foreignField: '_id', as: 'u' } }, { $unwind: '$u' }, { $group: { _id: '$u.status', n: { $sum: 1 } } }]),
@@ -62,7 +62,6 @@ export async function adminDashboard(q: z.infer<typeof dashboardQuerySchema>) {
     Vehicle.countDocuments({ ...officeMatch, status: 'ACTIVE' }),
     CabAssignment.distinct('vehicle', { ...officeMatch, status: 'ACTIVE', windowStart: { $lte: new Date() }, windowEnd: { $gte: new Date() } }),
     bookingCounts({ ...officeMatch, travelDate: date }),
-    EmailOutbox.countDocuments({ status: 'FAILED' }),
     // sign-in/out events stay in the full audit log; the dashboard shows meaningful actions only
     AuditLog.find({ action: { $nin: ['LOGIN', 'LOGOUT'] } }).sort({ createdAt: -1 }).limit(8).select('action summary actorEmail actorRole createdAt').lean(),
     CabRequest.countDocuments({ ...officeMatch, travelDate: date, isDelayed: true }),
@@ -77,7 +76,6 @@ export async function adminDashboard(q: z.infer<typeof dashboardQuerySchema>) {
     activeVerifiedDrivers,
     vehicles: { total: totalVehicles, available: Math.max(0, activeVehicles - busyVehicleIds.length) },
     bookings: { ...bookings, delayed },
-    failedEmails,
     cancellationRequests,
     recentActivity,
   };

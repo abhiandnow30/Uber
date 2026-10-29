@@ -40,7 +40,6 @@ const SECTION_TABS: Array<{ roles: Role[]; tabs: Tab[] }> = [
     roles: ['ADMIN'],
     tabs: [
       { to: '/admin/policy', label: 'Booking policy' },
-      { to: '/admin/notifications', label: 'Email delivery' },
       { to: '/admin/audit', label: 'Audit log' },
     ],
   },
@@ -58,7 +57,7 @@ const NAV: Record<Role, NavItem[]> = {
     { to: '/ops/history', label: 'History', icon: <History className={ic} /> },
     { to: '/ops/drivers', label: 'Drivers & vehicles', icon: <Car className={ic} />, match: ['/ops/vehicles'] },
     { to: '/admin/reports', label: 'Reports', icon: <BarChart3 className={ic} /> },
-    { to: '/admin/policy', label: 'Settings', icon: <Settings className={ic} />, match: ['/admin/notifications', '/admin/audit'] },
+    { to: '/admin/policy', label: 'Settings', icon: <Settings className={ic} />, match: ['/admin/audit'] },
   ],
   COORDINATOR: [
     { to: '/ops', label: 'Dashboard', icon: <Home className={ic} />, end: true },

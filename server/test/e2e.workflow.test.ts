@@ -55,12 +55,10 @@ describe('end-to-end workflow', () => {
     const assignedMail = fakeEmail.to('nisha.verma@test.com').find((m) => m.subject === `Your Cab Has Been Assigned — ${travelDate}`);
     expect(assignedMail?.text).toContain('Vehicle Number: TS09EE7777');
     expect(assignedMail?.text).toContain('Driver Name: Mohan Singh');
-    // Email delivery is visible to admins only
+    // Email delivery isn't shown to anyone
     const adminView = await admin.get(`/api/ops/bookings?date=${travelDate}`);
-    expect(adminView.body.items[0].notification.status).toBe('ACCEPTED');
-    const coordView = await coord.get(`/api/ops/bookings?date=${travelDate}`);
-    expect(coordView.body.items[0].notification).toBeUndefined();
-    expect((await coord.get(`/api/ops/bookings/${bookingId}`)).body.emails).toEqual([]);
+    expect(adminView.body.items[0].notification).toBeUndefined();
+    expect((await admin.get(`/api/ops/bookings/${bookingId}`)).body.emails).toBeUndefined();
 
     // 13-14. Driver sees in-app notification and acknowledges
     const notes = await driver.get('/api/notifications?unreadOnly=true');
