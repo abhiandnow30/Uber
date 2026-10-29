@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarClock, Car, Pencil, Phone, Plus, Users, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, EmptyState, ErrorState, PageHeader, Spinner, cn, useToast } from '../../components/ui';
+import { Alert, Button, Card, EmptyState, ErrorState, PageHeader, Plate, Spinner, cn, useToast } from '../../components/ui';
 import { CancelRideDialog, cabIsLate } from './CancelRideDialog';
 import { get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -92,30 +92,31 @@ function NextRideCard({ b, onCancel }: { b: HomeBooking; onCancel: (b: HomeBooki
         <RideRouteLink ride={b} />
       </div>
       {b.sharedCab && (
-        <p className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-lg bg-white/70 px-3 py-2 text-sm text-slate-700 ring-1 ring-indigo-100">
-          <Users className="h-4 w-4 text-indigo-600" aria-hidden />
-          <span className="font-medium text-indigo-900">Shared cab · {b.sharedCab.name}</span>
-          <span>
-            · {b.sharedCab.riders} riders · you&apos;re {b.sharedCab.direction === 'IN' ? 'pickup' : 'drop'}{' '}
-            <strong>
-              {b.sharedCab.stop} of {b.sharedCab.riders}
-            </strong>
-          </span>
-        </p>
+        <div className="mt-2 flex items-start gap-2 rounded-lg bg-white/70 px-3 py-2 text-sm text-slate-700 ring-1 ring-indigo-100">
+          <Users className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" aria-hidden />
+          <div className="min-w-0">
+            <p className="font-medium text-indigo-900">Shared cab · {b.sharedCab.name}</p>
+            <p>
+              {b.sharedCab.riders} riders · you&apos;re {b.sharedCab.direction === 'IN' ? 'pickup' : 'drop'}{' '}
+              <strong>
+                {b.sharedCab.stop} of {b.sharedCab.riders}
+              </strong>
+            </p>
+          </div>
+        </div>
       )}
 
       {waiting ? (
         <p className="mt-3 text-sm text-slate-600">We will let you know as soon as a driver and cab are assigned.</p>
       ) : a?.driver || a?.vehicle ? (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-3">
-          <div className="min-w-0">
-            <p className="font-medium text-slate-900">{a?.driver?.fullName ?? 'Driver'}</p>
-            {a?.vehicle?.registrationNumber && (
-              <p className="text-sm text-slate-600">
-                <span className="font-mono">{a.vehicle.registrationNumber}</span>
-                {vehicleModel ? ` · ${vehicleModel}` : ''}
-              </p>
-            )}
+          <div className="min-w-0 space-y-1.5">
+            {/* The cab number is what people look for when the cab arrives. */}
+            {a?.vehicle?.registrationNumber && <Plate reg={a.vehicle.registrationNumber} size="lg" />}
+            <p className="text-sm text-slate-700">
+              <span className="font-medium text-slate-900">{a?.driver?.fullName ?? 'Driver'}</span>
+              {vehicleModel ? <span className="text-slate-500"> · {vehicleModel}</span> : null}
+            </p>
           </div>
           {a?.driver?.phone && (
             <a
@@ -195,8 +196,9 @@ export default function EmployeeHome() {
   );
 
   return (
-    <>
-      <PageHeader title={firstName ? `Hi, ${firstName}` : 'Welcome'} subtitle="Book your office cab in a few taps." />
+    // A single column that stays easy to read on wide screens.
+    <div className="mx-auto max-w-3xl">
+      <PageHeader title={firstName ? `Hi, ${firstName}` : 'Welcome'} />
 
       {(!me?.profile?.homeAddress || !me?.profile?.homeLocation) && (
         <div className="mb-4">
@@ -251,6 +253,6 @@ export default function EmployeeHome() {
         onConfirm={cancel}
         summary={cancelling && <p>{cancelling.reference} · {fmtTravelDate(cancelling.travelDate)} · {pickupLabel(cancelling)}</p>}
       />
-    </>
+    </div>
   );
 }

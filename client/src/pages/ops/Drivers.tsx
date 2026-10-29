@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, useToast, type Column } from '../../components/ui';
+import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, Plate, SearchInput, Select, StatusBadge, useToast, type Column } from '../../components/ui';
 import { errorMessage, get, patch, post, type Paged } from '../../lib/api';
 import { fieldErrors, useAction, useListState, usePaged } from '../../lib/hooks';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
@@ -228,8 +228,8 @@ export default function Drivers() {
       header: 'Cab',
       render: (d) =>
         d.currentVehicle ? (
-          <Link to={`/ops/vehicles/${d.currentVehicle._id}`} onClick={(e) => e.stopPropagation()} className="whitespace-nowrap font-mono text-sm text-indigo-600 hover:underline">
-            {d.currentVehicle.registrationNumber}
+          <Link to={`/ops/vehicles/${d.currentVehicle._id}`} onClick={(e) => e.stopPropagation()} className="hover:underline">
+            <Plate reg={d.currentVehicle.registrationNumber} size="sm" />
           </Link>
         ) : (
           <span className="text-slate-400">No cab</span>

@@ -1,7 +1,7 @@
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Button, Card, EmptyState, ErrorState, PageHeader, Pagination, Spinner, StatusBadge, type Column, DataTable } from '../../components/ui';
+import { Button, Card, EmptyState, ErrorState, PageHeader, Pagination, Plate, Spinner, StatusBadge, type Column, DataTable } from '../../components/ui';
 import { qs } from '../../lib/api';
 import { fmtTravelDate } from '../../lib/format';
 import { pickupLabel } from '../../lib/policy';
@@ -45,7 +45,7 @@ function Cab({ b }: { b: MyBooking }) {
   return (
     <span>
       {a.driver?.fullName ?? '—'}
-      {a.vehicle?.registrationNumber ? <span className="text-slate-500"> · {a.vehicle.registrationNumber}</span> : null}
+      {a.vehicle?.registrationNumber ? <Plate reg={a.vehicle.registrationNumber} size="sm" className="ml-2" /> : null}
     </span>
   );
 }

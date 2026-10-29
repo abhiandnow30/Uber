@@ -1,10 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Home } from 'lucide-react';
-import { Alert, Button, Card, DescriptionList, Input, PageHeader, Select, StatusBadge, Textarea, useToast } from '../../components/ui';
+import { Alert, Button, Card, DescriptionList, Input, PageHeader, Select, Textarea, useToast } from '../../components/ui';
 import { errorMessage, patch, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fieldErrors } from '../../lib/hooks';
-import { fmtDateTime, humanize } from '../../lib/format';
 import { fmt12h, usePolicy } from '../../lib/policy';
 import { useSsoConfig } from '../../lib/sso';
 import { useUnsavedChanges } from '../../lib/unsaved';
@@ -59,11 +58,8 @@ export default function Account() {
             items={[
               ['Name', me.user.name],
               ...(me.user.email && !me.user.email.endsWith('@phone-login.invalid') ? ([['Email', me.user.email]] as Array<[string, string]>) : []),
-              ['Role', humanize(me.user.role)],
-              ['Status', <StatusBadge key="s" status={me.user.status} />],
               ...(profile.employeeId ? ([['Employee ID', profile.employeeId], ['Office', profile.officeLocation]] as Array<[string, string]>) : []),
               ...(profile.driverCode ? ([['Driver ID', profile.driverCode], ['Office', profile.officeLocation]] as Array<[string, string]>) : []),
-              ['Last sign-in', fmtDateTime(me.user.lastLoginAt)],
             ]}
           />
         </Card>
@@ -179,7 +175,7 @@ function CabDetailsCard() {
           error={errors.homeAddress}
         />
         <p className="text-xs text-slate-500">
-          You can pick a different shift or cab time for a single ride on the request form. Your address is used as the pickup or drop-off of your rides, so the transport team and your driver see it on those rides.
+          Used for your rides. You can still pick another shift for a single ride when you request it.
         </p>
         {errors.form && <Alert tone="error">{errors.form}</Alert>}
         <MapLinkField spot={spot} onSpot={setSpot} saved={!pinChanged} required />

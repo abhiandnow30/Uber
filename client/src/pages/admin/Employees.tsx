@@ -325,7 +325,7 @@ function RouteCell({ employee, routes }: { employee: EmployeeRow; routes: string
             e.currentTarget.blur();
           }
         }}
-        className="h-9 w-44 rounded-lg border border-transparent bg-transparent px-2 text-sm text-slate-900 placeholder:text-slate-400 hover:border-slate-300 focus:border-indigo-500 focus:bg-white focus:outline-none"
+        className="-ml-2 h-9 w-44 rounded-lg border border-transparent bg-transparent px-2 text-sm text-slate-900 placeholder:text-slate-400 hover:border-slate-300 focus:border-indigo-500 focus:bg-white focus:outline-none"
       />
       <datalist id="employee-routes-inline">
         {routes.map((r) => (
@@ -406,7 +406,7 @@ export default function Employees() {
     <>
       <PageHeader
         title="Employees"
-        subtitle="Employees who can book cabs. New accounts show as Invited until the employee first signs in with Microsoft."
+        subtitle="Everyone who can book a cab."
         actions={
           <Button icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(true)}>
             Add employee

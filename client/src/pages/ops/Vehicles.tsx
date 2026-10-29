@@ -1,7 +1,7 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, SearchInput, Select, StatusBadge, type Column } from '../../components/ui';
+import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, Plate, SearchInput, Select, StatusBadge, type Column } from '../../components/ui';
 import { errorMessage, patch, post } from '../../lib/api';
 import { fieldErrors, useAction, useListState, usePaged } from '../../lib/hooks';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
@@ -142,7 +142,7 @@ export default function Vehicles() {
   const { data, isLoading, error, refetch } = usePaged<VehicleRow>(['ops', 'vehicles'], '/ops/vehicles', list.query);
 
   const columns: Column<VehicleRow>[] = [
-    { key: 'reg', header: 'Reg. number', sortKey: 'registrationNumber', render: (v) => <Link to={`/ops/vehicles/${v._id}`} onClick={(e) => e.stopPropagation()} className="whitespace-nowrap font-medium text-indigo-600 hover:underline">{v.registrationNumber}</Link> },
+    { key: 'reg', header: 'Reg. number', sortKey: 'registrationNumber', render: (v) => <Link to={`/ops/vehicles/${v._id}`} onClick={(e) => e.stopPropagation()} className="hover:underline"><Plate reg={v.registrationNumber} size="sm" /></Link> },
     { key: 'cap', header: 'Seats', sortKey: 'capacity', render: (v) => v.capacity, className: 'text-center' },
     { key: 'status', header: 'Status', sortKey: 'status', render: (v) => <StatusBadge status={v.status} /> },
     { key: 'driver', header: 'Driver', render: (v) => <DriverPicker vehicle={v} className="min-w-[12rem]" /> },

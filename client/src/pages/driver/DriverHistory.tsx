@@ -1,7 +1,7 @@
 import { ArrowLeft, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Card, EmptyState, ErrorState, Pagination, Spinner, StatusBadge } from '../../components/ui';
+import { Card, EmptyState, ErrorState, Pagination, Plate, Spinner, StatusBadge } from '../../components/ui';
 import { qs } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtTravelDate } from '../../lib/format';
 import { usePaged } from '../../lib/hooks';
@@ -71,7 +71,7 @@ export default function DriverHistory() {
                         <Users className="h-3.5 w-3.5" aria-hidden /> {b.passengers}
                       </span>
                     )}
-                    {r.vehicle?.registrationNumber && <span>{r.vehicle.registrationNumber}</span>}
+                    {r.vehicle?.registrationNumber && <Plate reg={r.vehicle.registrationNumber} size="sm" />}
                     {r.completedAt && <span>Completed {fmtDateTime(r.completedAt)}</span>}
                   </p>
                   {r.endReason && r.assignmentStatus !== 'COMPLETED' && <p className="mt-1 text-xs text-slate-600">Reason: {r.endReason}</p>}

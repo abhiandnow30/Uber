@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, Phone } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, PageHeader, Spinner, StatusBadge, useToast } from '../../components/ui';
+import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, PageHeader, Plate, Spinner, StatusBadge, cn, useToast } from '../../components/ui';
 import { ApiError, get, post } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 import { pickupLabel } from '../../lib/policy';
@@ -170,12 +170,8 @@ export default function MyBookingDetail() {
                     </a>
                   ) : null,
                 ],
-                ['Vehicle', a.vehicle?.registrationNumber ? <span className="font-mono">{a.vehicle.registrationNumber}</span> : null],
+                ['Cab number', a.vehicle?.registrationNumber ? <Plate reg={a.vehicle.registrationNumber} size="lg" /> : null],
                 ['Model', a.vehicle?.model || (a.vehicle?.vehicleType ? humanize(a.vehicle.vehicleType) : null)],
-                ['On the way', a.enRouteAt ? fmtDateTime(a.enRouteAt, tz) : null],
-                ['Arrived', a.arrivedAt ? fmtDateTime(a.arrivedAt, tz) : null],
-                ['Trip started', a.startedAt ? fmtDateTime(a.startedAt, tz) : null],
-                ['Completed', a.completedAt ? fmtDateTime(a.completedAt, tz) : null],
               ]}
             />
           </Card>
@@ -186,19 +182,17 @@ export default function MyBookingDetail() {
             items={[
               ['Date', fmtTravelDate(b.travelDate)],
               ...(b.direction === 'IN' && b.reportBy ? ([['Reach office by', fmt12h(b.reportBy)]] as Array<[string, string]>) : []),
-              ['Pickup time', b.direction === 'IN' && b.pickupTimeSet === false ? 'Set by the transport team when your cab is assigned' : `${fmt12h(b.pickupTime)} (${tz})`],
+              ['Pickup time', b.direction === 'IN' && b.pickupTimeSet === false ? 'Set by the transport team when your cab is assigned' : fmt12h(b.pickupTime)],
               ['Pickup', b.pickupLocation],
               ['Destination', b.dropLocation],
-              ['Passengers', b.passengers],
-              ['Trip type', `${humanize(b.tripType)}${b.tripType === 'ROUND_TRIP' && b.leg ? ` · ${humanize(b.leg)} leg` : ''}`],
-              ['Office', b.officeLocation],
+              ['Trip type', b.tripType === 'ROUND_TRIP' ? `Round trip${b.leg ? ` · ${humanize(b.leg)} leg` : ''}` : null],
               ['Shift', b.shift || null],
               ['Notes', b.notes || null],
             ]}
           />
         </Card>
 
-        {isActive && (
+        {isActive && (b.canCancel || !!cr || b.canRequestCancellation) && (
           <Card title="Cancellation">
             {b.canCancel ? (
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -243,13 +237,11 @@ export default function MyBookingDetail() {
         <Card title="Status history">
           {b.history.length ? (
             <ol className="relative space-y-4 border-l border-slate-200 pl-5">
-              {b.history.map((h) => (
+              {b.history.map((h, i) => (
                 <li key={h._id} className="relative">
-                  <span className="absolute left-[-25px] top-1.5 h-2.5 w-2.5 rounded-full bg-slate-400 ring-4 ring-white" aria-hidden />
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-slate-900">{humanize(h.event)}</span>
-                    <StatusBadge status={h.to} />
-                  </div>
+                  {/* The latest step stands out; earlier ones are greyed. */}
+                  <span className={cn('absolute left-[-25px] top-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-white', i === b.history.length - 1 ? 'bg-indigo-600' : 'bg-slate-300')} aria-hidden />
+                  <p className={cn('text-sm', i === b.history.length - 1 ? 'font-semibold text-slate-900' : 'font-medium text-slate-700')}>{humanize(h.event)}</p>
                   <p className="text-xs text-slate-500">{fmtDateTime(h.createdAt, tz)}</p>
                   {h.reason && <p className="mt-0.5 text-sm text-slate-600">{h.reason}</p>}
                 </li>

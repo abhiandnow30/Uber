@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, Bell, Car, ChevronRight, History, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, EmptyState, ErrorState, Spinner } from '../../components/ui';
+import { Alert, Button, Card, EmptyState, ErrorState, Plate, Spinner } from '../../components/ui';
 import { get } from '../../lib/api';
-import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
+import { fmt12h, fmtTravelDate, humanize } from '../../lib/format';
 
 type Vehicle = { registrationNumber?: string; model?: string; capacity?: number; status?: string } | null;
 
@@ -148,7 +148,7 @@ function RideCard({ r }: { r: RideView }) {
 export default function DriverHome() {
   const navigate = useNavigate();
   const [showAll, setShowAll] = useState(false);
-  const { data, isLoading, error, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['driver', 'home'],
     queryFn: () => get<DriverHomeData>('/driver/home'),
     refetchInterval: 30_000,
@@ -178,7 +178,7 @@ export default function DriverHome() {
             <h1 className="truncate text-xl font-semibold text-slate-900">{d?.fullName ?? 'Driver'}</h1>
             <p className="mt-0.5 flex items-center gap-1.5 text-base text-slate-700">
               <Car className="h-5 w-5 text-slate-500" aria-hidden />
-              {cv?.registrationNumber ? <span className="font-mono font-semibold">{cv.registrationNumber}</span> : <span className="text-slate-500">No vehicle linked</span>}
+              {cv?.registrationNumber ? <Plate reg={cv.registrationNumber} /> : <span className="text-slate-500">No vehicle linked</span>}
             </p>
           </div>
           <Link to="/notifications" className="relative rounded-lg p-2 text-slate-600 hover:bg-slate-100" aria-label={`Messages, ${data.unreadNotifications} unread`}>
@@ -268,7 +268,6 @@ export default function DriverHome() {
         )}
       </div>
 
-      <p className="text-center text-xs text-slate-400">Updated {fmtDateTime(new Date(dataUpdatedAt).toISOString())} · refreshes automatically</p>
     </div>
   );
 }

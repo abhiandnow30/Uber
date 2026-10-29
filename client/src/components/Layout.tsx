@@ -215,7 +215,7 @@ export function AppLayout() {
 function Brand() {
   return (
     <div className="flex h-14 items-center gap-2 px-5">
-      <img src="/favicon.svg" alt="" className="h-7 w-7" />
+      <img src="/icon-192.png" alt="" className="h-8 w-8 rounded-lg" />
       <span className="font-semibold tracking-tight">Cab Booking</span>
     </div>
   );

@@ -275,41 +275,49 @@ export default function DriverTrip() {
             <span className="text-2xl font-bold text-slate-900">{fmt12h(first.pickupTime)}</span> · {fmtTravelDate(first.travelDate)}
           </p>
         )}
-        <ol className="mt-3 space-y-1.5">
+        <ol className="mt-3 divide-y divide-slate-100">
           {rides.map((r, i) => {
             const pos = live.indexOf(r);
             const endedAs = r.assignmentStatus !== 'ACTIVE' ? (ENDED[r.assignmentStatus] ?? 'Ended') : r.booking?.status === 'IN_PROGRESS' ? 'On board' : null;
             return (
-              <li key={r.assignmentId} className={cn('flex items-start gap-2 text-sm', r.assignmentStatus !== 'ACTIVE' && 'text-slate-400')}>
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-800">{i + 1}</span>
-                <span className="min-w-0 flex-1">
-                  <span className="font-medium text-slate-900">{nameOf(r)}</span> — {toOffice ? r.booking?.pickupLocation : r.booking?.dropLocation}
-                </span>
-                {endedAs && (
-                  <span className={cn('shrink-0 text-xs font-medium', r.assignmentStatus === 'COMPLETED' || endedAs === 'On board' ? 'text-emerald-700' : 'text-slate-500')}>
-                    {r.assignmentStatus === 'COMPLETED' ? <CheckCircle2 className="mr-0.5 inline h-3.5 w-3.5" aria-hidden /> : r.assignmentStatus !== 'ACTIVE' ? <XCircle className="mr-0.5 inline h-3.5 w-3.5" aria-hidden /> : null}
-                    {endedAs}
-                  </span>
-                )}
+              <li key={r.assignmentId} className={cn('flex items-center gap-3 py-2.5 text-sm', r.assignmentStatus !== 'ACTIVE' && 'opacity-60')}>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-bold text-indigo-800">{i + 1}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="text-base font-semibold text-slate-900">{nameOf(r)}</span>
+                    {endedAs && (
+                      <span
+                        className={cn(
+                          'inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-medium',
+                          r.assignmentStatus === 'COMPLETED' || endedAs === 'On board' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600',
+                        )}
+                      >
+                        {r.assignmentStatus === 'COMPLETED' ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> : r.assignmentStatus !== 'ACTIVE' ? <XCircle className="h-3.5 w-3.5" aria-hidden /> : null}
+                        {endedAs}
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-slate-600">{toOffice ? r.booking?.pickupLocation : r.booking?.dropLocation}</p>
+                </div>
                 {live.length > 1 && pos >= 0 && (
-                  <span className="flex shrink-0 gap-1">
+                  <span className="flex shrink-0 gap-1.5">
                     <button
                       type="button"
                       onClick={() => move(r, -1)}
                       disabled={busy || pos === 0}
                       aria-label={`Move ${nameOf(r)} earlier`}
-                      className="rounded-lg border border-slate-300 p-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-30"
+                      className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-30"
                     >
-                      <ChevronUp className="h-4 w-4" aria-hidden />
+                      <ChevronUp className="h-5 w-5" aria-hidden />
                     </button>
                     <button
                       type="button"
                       onClick={() => move(r, 1)}
                       disabled={busy || pos === live.length - 1}
                       aria-label={`Move ${nameOf(r)} later`}
-                      className="rounded-lg border border-slate-300 p-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-30"
+                      className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-30"
                     >
-                      <ChevronDown className="h-4 w-4" aria-hidden />
+                      <ChevronDown className="h-5 w-5" aria-hidden />
                     </button>
                   </span>
                 )}

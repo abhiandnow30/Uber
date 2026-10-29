@@ -36,11 +36,16 @@ export function Button({ variant = 'primary', size = 'md', loading, icon, classN
     success: 'bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-300',
     ghost: 'text-slate-700 hover:bg-slate-100 disabled:text-slate-400',
   };
-  const sizes = { sm: 'h-8 px-3 text-sm', md: 'h-10 px-4 text-sm', lg: 'h-12 px-5 text-base', xl: 'h-16 px-6 text-lg w-full' };
+  const sizes = { sm: 'h-8 px-3 text-sm pointer-coarse:h-10', md: 'h-10 px-4 text-sm', lg: 'h-12 px-5 text-base', xl: 'h-16 px-6 text-lg w-full' };
   return (
     <button
       type="button"
-      className={cn('inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed', variants[variant], sizes[size], className)}
+      className={cn(
+        'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed',
+        variants[variant],
+        sizes[size],
+        className,
+      )}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       {...rest}
@@ -62,7 +67,11 @@ function FieldWrap({ id, label, error, hint, required, className, children }: Fi
       {label && (
         <label htmlFor={id} className="block text-sm font-medium text-slate-700">
           {label}
-          {required && <span className="ml-0.5 text-red-600" aria-hidden>*</span>}
+          {required && (
+            <span className="ml-0.5 text-red-600" aria-hidden>
+              *
+            </span>
+          )}
         </label>
       )}
       {children}
@@ -181,7 +190,21 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function StatCard({ label, value, hint, tone = 'default', icon, onClick }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'default' | 'warn' | 'danger' | 'good'; icon?: ReactNode; onClick?: () => void }) {
+export function StatCard({
+  label,
+  value,
+  hint,
+  tone = 'default',
+  icon,
+  onClick,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: ReactNode;
+  tone?: 'default' | 'warn' | 'danger' | 'good';
+  icon?: ReactNode;
+  onClick?: () => void;
+}) {
   const tones = { default: 'text-slate-900', warn: 'text-amber-600', danger: 'text-red-600', good: 'text-emerald-600' };
   const Tag = onClick ? 'button' : 'div';
   return (
@@ -196,16 +219,19 @@ export function StatCard({ label, value, hint, tone = 'default', icon, onClick }
   );
 }
 
+/** Label/value pairs. Rows with no value are left out, so a page only shows what it knows. */
 export function DescriptionList({ items, columns = 2 }: { items: Array<[string, ReactNode]>; columns?: 1 | 2 | 3 }) {
   const cols = { 1: 'sm:grid-cols-1', 2: 'sm:grid-cols-2', 3: 'sm:grid-cols-3' };
   return (
     <dl className={cn('grid grid-cols-1 gap-x-6 gap-y-3', cols[columns])}>
-      {items.map(([k, v]) => (
-        <div key={k}>
-          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{k}</dt>
-          <dd className="mt-0.5 wrap-break-word text-sm text-slate-900">{v ?? '—'}</dd>
-        </div>
-      ))}
+      {items
+        .filter(([, v]) => v !== null && v !== undefined && v !== '')
+        .map(([k, v]) => (
+          <div key={k}>
+            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{k}</dt>
+            <dd className="mt-0.5 wrap-break-word text-sm text-slate-900">{v}</dd>
+          </div>
+        ))}
     </dl>
   );
 }
@@ -219,7 +245,10 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: Array<
           role="tab"
           aria-selected={value === t.value}
           onClick={() => onChange(t.value)}
-          className={cn('whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium', value === t.value ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700')}
+          className={cn(
+            'whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',
+            value === t.value ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700',
+          )}
         >
           {t.label}
         </button>
@@ -301,7 +330,9 @@ const STATUS_LABELS: Record<string, string> = {
 export function StatusBadge({ status, className }: { status?: string | null; className?: string }) {
   if (!status) return <span className="text-slate-400">—</span>;
   return (
-    <span className={cn('inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium', STATUS_TONES[status] ?? 'bg-slate-100 text-slate-700', className)}>
+    <span
+      className={cn('inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium', STATUS_TONES[status] ?? 'bg-slate-100 text-slate-700', className)}
+    >
       {STATUS_LABELS[status] ?? humanize(status)}
     </span>
   );
@@ -366,7 +397,21 @@ export function Alert({ tone = 'info', title, children }: { tone?: 'info' | 'war
 // ---------------------------------------------------------------------------
 // Modal + confirm dialog
 // ---------------------------------------------------------------------------
-export function Modal({ open, onClose, title, children, footer, size = 'md' }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl' }) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  size = 'md',
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // The latest onClose, so the effect below runs only when the popup opens or closes (it moves focus
@@ -390,7 +435,13 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: {
   const sizes = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} className={cn('flex max-h-[92vh] w-full min-w-0 max-w-full flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl', sizes[size])}>
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={cn('flex max-h-[92vh] w-full min-w-0 max-w-full flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl', sizes[size])}
+      >
         <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <h2 id={titleId} className="min-w-0 break-words text-lg font-semibold">
             {title}
@@ -535,53 +586,61 @@ export function DataTable<T>({
     <>
       <CardList columns={columns} rows={rows} rowKey={rowKey} loading={loading} empty={empty} sort={sort} onSort={onSort} onRowClick={onRowClick} />
       <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block">
-      <table className="min-w-full divide-y divide-slate-200 text-sm">
-        <thead className={hideHeader ? 'sr-only' : 'bg-slate-50'}>
-          <tr>
-            {columns.map((c) => (
-              <th key={c.key} scope="col" className={cn('whitespace-nowrap px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500', c.className)} aria-sort={c.sortKey && sortField === c.sortKey ? (desc ? 'descending' : 'ascending') : undefined}>
-                {c.sortKey && onSort ? (
-                  <button className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-slate-800" onClick={() => onSort(sortField === c.sortKey && !desc ? `-${c.sortKey}` : c.sortKey!)}>
-                    {c.header}
-                    {sortField === c.sortKey ? desc ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" /> : null}
-                  </button>
-                ) : (
-                  c.header
-                )}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {loading ? (
+        <table className="min-w-full divide-y divide-slate-200 text-sm">
+          <thead className={hideHeader ? 'sr-only' : 'bg-slate-50'}>
             <tr>
-              <td colSpan={columns.length}>
-                <Spinner />
-              </td>
+              {columns.map((c) => (
+                <th
+                  key={c.key}
+                  scope="col"
+                  className={cn('whitespace-nowrap px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500', c.className)}
+                  aria-sort={c.sortKey && sortField === c.sortKey ? (desc ? 'descending' : 'ascending') : undefined}
+                >
+                  {c.sortKey && onSort ? (
+                    <button
+                      className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-slate-800"
+                      onClick={() => onSort(sortField === c.sortKey && !desc ? `-${c.sortKey}` : c.sortKey!)}
+                    >
+                      {c.header}
+                      {sortField === c.sortKey ? desc ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" /> : null}
+                    </button>
+                  ) : (
+                    c.header
+                  )}
+                </th>
+              ))}
             </tr>
-          ) : !rows?.length ? (
-            <tr>
-              <td colSpan={columns.length}>{empty ?? <EmptyState title="Nothing here yet" />}</td>
-            </tr>
-          ) : (
-            rows.map((row) => (
-              <tr
-                key={rowKey(row)}
-                className={cn(onRowClick && 'cursor-pointer hover:bg-slate-50')}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                onKeyDown={onRowClick ? (e) => e.key === 'Enter' && onRowClick(row) : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
-              >
-                {columns.map((c) => (
-                  <td key={c.key} className={cn('px-3 py-2.5 align-top text-slate-700', c.className)}>
-                    {c.render(row)}
-                  </td>
-                ))}
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr>
+                <td colSpan={columns.length}>
+                  <Spinner />
+                </td>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+            ) : !rows?.length ? (
+              <tr>
+                <td colSpan={columns.length}>{empty ?? <EmptyState title="Nothing here yet" />}</td>
+              </tr>
+            ) : (
+              rows.map((row) => (
+                <tr
+                  key={rowKey(row)}
+                  className={cn(onRowClick && 'cursor-pointer hover:bg-slate-50')}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  onKeyDown={onRowClick ? (e) => e.key === 'Enter' && onRowClick(row) : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                >
+                  {columns.map((c) => (
+                    <td key={c.key} className={cn('px-3 py-2.5 align-middle text-slate-700', c.className)}>
+                      {c.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </>
   );
@@ -642,34 +701,38 @@ function CardList<T>({
         <div className="rounded-xl border border-slate-200 bg-white">{empty ?? <EmptyState title="Nothing here yet" />}</div>
       ) : (
         <ul className="space-y-3">
-          {rows.map((row) => (
-            <li
-              key={rowKey(row)}
-              className={cn('rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700', onRowClick && 'cursor-pointer active:bg-slate-50')}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-              onKeyDown={onRowClick ? (e) => e.key === 'Enter' && onRowClick(row) : undefined}
-              tabIndex={onRowClick ? 0 : undefined}
-            >
-              {title && <div className="mb-2 font-medium text-slate-900">{title.render(row)}</div>}
-              {fields.length > 0 && (
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-                  {fields.map((c) => (
-                    <div key={c.key} className={cn('min-w-0', c.cardWide && 'col-span-2 sm:col-span-3')}>
-                      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label(c)}</dt>
-                      <dd className="mt-0.5 break-words [&_*]:max-w-full">{c.render(row)}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-              {footer.length > 0 && (
-                <div className="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-3">
-                  {footer.map((c) => (
-                    <div key={c.key}>{c.render(row)}</div>
-                  ))}
-                </div>
-              )}
-            </li>
-          ))}
+          {rows.map((row) => {
+            // Action buttons for this row; a row with none gets no empty footer strip.
+            const actions = footer.map((c) => [c.key, c.render(row)] as const).filter(([, node]) => node !== null && node !== undefined && node !== false);
+            return (
+              <li
+                key={rowKey(row)}
+                className={cn('rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700', onRowClick && 'cursor-pointer active:bg-slate-50')}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onKeyDown={onRowClick ? (e) => e.key === 'Enter' && onRowClick(row) : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+              >
+                {title && <div className="mb-2 font-medium text-slate-900">{title.render(row)}</div>}
+                {fields.length > 0 && (
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                    {fields.map((c) => (
+                      <div key={c.key} className={cn('min-w-0', c.cardWide && 'col-span-2 sm:col-span-3')}>
+                        <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label(c)}</dt>
+                        <dd className="mt-0.5 break-words [&_*]:max-w-full">{c.render(row)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {actions.length > 0 && (
+                  <div className="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                    {actions.map(([key, node]) => (
+                      <div key={key}>{node}</div>
+                    ))}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -710,7 +773,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     error: (t, b) => push('error', t, b),
     info: (t, b) => push('info', t, b),
   });
-  const icons = { success: <CheckCircle2 className="h-5 w-5 text-emerald-500" />, error: <XCircle className="h-5 w-5 text-red-500" />, info: <Info className="h-5 w-5 text-sky-500" /> };
+  const icons = {
+    success: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
+    error: <XCircle className="h-5 w-5 text-red-500" />,
+    info: <Info className="h-5 w-5 text-sky-500" />,
+  };
   return (
     <ToastCtx.Provider value={apiRef.current}>
       {children}
@@ -733,4 +800,36 @@ export function useToast() {
   const ctx = useContext(ToastCtx);
   if (!ctx) throw new Error('useToast outside ToastProvider');
   return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// Number plate
+// ---------------------------------------------------------------------------
+/** "TS09CD5678" → "TS 09 CD 5678", the way plates are read; anything else is shown as written. */
+export function formatPlate(reg: string) {
+  const m = reg
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .match(/^([A-Z]{2})(\d{1,2})([A-Z]{0,3})(\d{1,4})$/);
+  return m ? [m[1], m[2], m[3], m[4]].filter(Boolean).join(' ') : reg;
+}
+
+/**
+ * The cab's registration number as a yellow commercial plate, the one thing people look for when
+ * the cab arrives. `size`: sm in tables and lists, md on cards, lg where it's the headline.
+ */
+export function Plate({ reg, size = 'md', className }: { reg: string; size?: 'sm' | 'md' | 'lg'; className?: string }) {
+  const sizes = { sm: 'px-1.5 py-0.5 text-xs border', md: 'px-2 py-0.5 text-sm border-2', lg: 'px-2.5 py-1 text-lg border-2' };
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center whitespace-nowrap rounded-md border-slate-900 bg-amber-300 font-mono font-bold tracking-wider text-slate-900',
+        sizes[size],
+        className,
+      )}
+      aria-label={`Cab number ${reg}`}
+    >
+      {formatPlate(reg)}
+    </span>
+  );
 }

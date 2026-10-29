@@ -390,8 +390,9 @@ export default function DriverRide() {
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <p className="font-mono text-sm text-slate-500">{b?.reference}</p>
-            <p className="text-3xl font-semibold text-slate-900">{fmt12h(b?.pickupTime)}</p>
+            {/* Who to pick up, and when: what the driver needs at a glance. */}
+            <p className="text-lg font-semibold text-slate-900">{ride.employee?.name ?? 'Passenger'}</p>
+            <p className="text-3xl font-bold text-slate-900">{fmt12h(b?.pickupTime)}</p>
             <p className="text-sm text-slate-600">{b ? fmtTravelDate(b.travelDate) : '—'}</p>
           </div>
           <div className="flex flex-col items-end gap-1">
@@ -446,13 +447,9 @@ export default function DriverRide() {
           items={[
             ['Pickup', <span key="p" className="text-base">{b?.pickupLocation}</span>],
             ['Destination', <span key="d" className="text-base">{b?.dropLocation}</span>],
-            ['Passengers', b?.passengers],
-            [
-              'Passenger',
-              ride.employee?.name ?? null,
-            ],
-            ['Vehicle', ride.vehicle?.registrationNumber ? `${ride.vehicle.registrationNumber}${ride.vehicle.model ? ` · ${ride.vehicle.model}` : ''}` : null],
+            ['Passengers', b && b.passengers > 1 ? b.passengers : null],
             ['Passenger notes', b?.notes || null],
+            ['Ride reference', <span key="r" className="font-mono text-xs text-slate-500">{b?.reference}</span>],
           ]}
           columns={1}
         />

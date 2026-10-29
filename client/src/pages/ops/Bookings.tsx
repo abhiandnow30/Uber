@@ -13,6 +13,7 @@ import {
   Input,
   Modal,
   PageHeader,
+  Plate,
   Pagination,
   SearchInput,
   Select,
@@ -1078,7 +1079,7 @@ export default function Bookings({ history = false }: { history?: boolean }) {
     flagged: flags === 'flagged' ? 'true' : undefined,
     cancellationRequested: flags === 'cancelRequested' ? 'true' : undefined,
   });
-  const { data, isLoading, error, refetch, isFetching } = usePaged<BookingRow>(['ops', 'bookings'], '/ops/bookings', query);
+  const { data, isLoading, error, refetch } = usePaged<BookingRow>(['ops', 'bookings'], '/ops/bookings', query);
   // Only rides still waiting (and on screen) can be pooled; anything else drops out of the selection.
   const selectedRides = useMemo(() => (data?.items ?? []).filter((r) => selected.has(r._id) && ASSIGNABLE.includes(r.status)), [data, selected]);
   useEffect(() => {
@@ -1183,8 +1184,8 @@ export default function Bookings({ history = false }: { history?: boolean }) {
           <span className="text-sm text-slate-400">—</span>
         ) : b.driver || b.vehicle ? (
           <div className="text-sm lg:whitespace-nowrap">
-            <p className="font-medium text-slate-900">{b.vehicle?.registrationNumber ?? '—'}</p>
-            <p className="text-slate-600">
+            {b.vehicle?.registrationNumber ? <Plate reg={b.vehicle.registrationNumber} size="sm" /> : <p className="text-slate-400">—</p>}
+            <p className="mt-1 text-slate-600">
               {b.driver?.fullName ?? '—'}
               {b.driver?.phone ? <span className="text-slate-400"> · {b.driver.phone}</span> : null}
             </p>
@@ -1254,7 +1255,7 @@ export default function Bookings({ history = false }: { history?: boolean }) {
               </Button>,
             );
         }
-        return buttons.length ? <div className="flex flex-wrap justify-end gap-2 lg:flex-nowrap [&>button]:whitespace-nowrap">{buttons}</div> : <span className="text-sm text-slate-400">—</span>;
+        return buttons.length ? <div className="flex flex-wrap justify-end gap-2 lg:flex-nowrap [&>button]:whitespace-nowrap">{buttons}</div> : null;
       },
     },
   ];
@@ -1272,11 +1273,7 @@ export default function Bookings({ history = false }: { history?: boolean }) {
       <PageHeader
         title={history ? 'History' : 'Cab requests'}
         subtitle={history ? 'All bookings, newest first' : linkedDate ? linkedLabel : `${day === 'today' ? "Today's" : "Tomorrow's"} shifts · ${fmtTravelDate(workDay)}`}
-        actions={
-          <Button variant="secondary" onClick={() => refetch()} loading={isFetching && !isLoading}>
-            Refresh
-          </Button>
-        }
+
       />
 
       {history ? (
@@ -1547,19 +1544,23 @@ function RideGroups({
         const shared = g.tripId ? g.first : null;
         return (
           <details key={g.key} open className="group rounded-xl border border-slate-200 bg-white shadow-xs">
-            <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-              <span className="flex min-w-0 items-center gap-2">
-                <Car className="h-5 w-5 shrink-0 text-slate-400" aria-hidden />
-                <span className={cn('truncate font-semibold', g.label === NO_ROUTE && !g.tripId ? 'text-slate-500' : 'text-slate-900')}>{g.label}</span>
-                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{count(all.length)}</span>
+            <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+              <Car className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" aria-hidden />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <p className="flex flex-wrap items-center gap-2">
+                  <span className={cn('font-semibold', g.label === NO_ROUTE && !g.tripId ? 'text-slate-500' : 'text-slate-900')}>{g.label}</span>
+                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{count(all.length)}</span>
+                  {shared?.vehicle?.capacity ? <SeatsFree capacity={shared.vehicle.capacity} used={all.reduce((n, r) => n + (r.passengers || 1), 0)} needed={0} /> : null}
+                </p>
+                {/* Which cab it is, on every screen size: plate first. */}
                 {shared && (
-                  <span className="hidden truncate text-sm text-slate-600 md:inline">
-                    · <span className="font-mono">{shared.vehicle?.registrationNumber ?? '—'}</span> · {shared.driver?.fullName ?? '—'}
-                    {shared.driver?.phone ? <span className="text-slate-400"> · {shared.driver.phone}</span> : null}
-                  </span>
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-600">
+                    {shared.vehicle?.registrationNumber ? <Plate reg={shared.vehicle.registrationNumber} size="sm" /> : null}
+                    <span className="font-medium text-slate-800">{shared.driver?.fullName ?? '—'}</span>
+                    {shared.driver?.phone ? <span className="text-slate-500">{shared.driver.phone}</span> : null}
+                  </p>
                 )}
-                {shared?.vehicle?.capacity ? <SeatsFree capacity={shared.vehicle.capacity} used={all.reduce((n, r) => n + (r.passengers || 1), 0)} needed={0} /> : null}
-              </span>
+              </div>
               <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
                 <span className="hidden sm:inline">{[...g.times.values()].map((list) => `${list[0].direction === 'IN' ? 'IN' : 'OUT'} ${fmt12h(groupTime(list[0]))}`).join(' · ')}</span>
                 {g.tripId && onRename && (

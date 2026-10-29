@@ -366,7 +366,6 @@ export default function RequestCab() {
                         </div>
                       ))}
                     </dl>
-                    <p className="mt-2 text-xs text-slate-500">From your present address. The transport team plans the cab route.</p>
                   </div>
                 );
               })()
@@ -378,9 +377,6 @@ export default function RequestCab() {
                 </Link>
               </Alert>
             )}
-            <p className="text-sm text-slate-600">
-              Office: <span className="font-medium text-slate-900">{office ? `${office.name} (${office.code})` : myOffice || '—'}</span>
-            </p>
             <div className="flex flex-wrap gap-2 pt-2">
               <Button type="submit" size="lg" loading={submitting} disabled={submitting || (hasHours && timesOk && !direction)}>
                 {ride ? 'Save changes' : 'Submit request'}
@@ -392,22 +388,21 @@ export default function RequestCab() {
           </form>
         </Card>
         <div className="space-y-4">
-          <Alert tone="info" title="Booking rules">
+          <Alert tone="info" title="Good to know">
             <ul className="mt-1 list-disc space-y-1 pl-4">
               {winStart && winEnd && (
                 <>
                   <li>
-                    <strong>IN</strong> (to the office): for shifts starting {fmt12h(inFrom)} – {fmt12h(winEnd)}. Your pickup time is set by the transport team.
+                    <strong>To the office:</strong> shifts starting {fmt12h(inFrom)} – {fmt12h(winEnd)}; the transport team sets your pickup time.
                   </li>
                   <li>
-                    <strong>OUT</strong> (home): for shifts ending {fmt12h(winStart)} – before {fmt12h(winEnd)}. The cab leaves when your shift ends.
+                    <strong>Home:</strong> shifts ending {fmt12h(winStart)} – {fmt12h(winEnd)}; the cab leaves when your shift ends.
                   </li>
                 </>
               )}
-              <li>One cab per shift day.</li>
-              <li>Book at least {minutesLabel(rules.minLeadMinutes)} ahead.</li>
+              <li>One cab per shift day, booked at least {minutesLabel(rules.minLeadMinutes)} ahead.</li>
               {rules.dailyCutoffTime && <li>Bookings for a day close at {fmt12h(rules.dailyCutoffTime)} on the previous day.</li>}
-              <li>You can change or cancel your ride yourself until a cab is assigned; after that, send a cancellation request to the admin from the booking.</li>
+              <li>Change or cancel it yourself until a cab is assigned.</li>
               {rules.approvalRequired && <li>Requests need approval before a cab is assigned.</li>}
             </ul>
           </Alert>
