@@ -32,6 +32,8 @@ export function escapeHtml(value: unknown): string {
 }
 
 const portalUrl = () => config.APP_BASE_URL;
+/** The app icon's blue. */
+const BRAND_BLUE = '#0129ac';
 
 function layout(greetingName: unknown, paragraphs: string[], details?: Array<[string, unknown]>, cta?: [string, string]) {
   const detailHtml = details?.length
@@ -40,9 +42,15 @@ function layout(greetingName: unknown, paragraphs: string[], details?: Array<[st
         .join('')}</ul>`
     : '';
   const ctaHtml = cta
-    ? `<p style="margin:20px 0"><a href="${escapeHtml(cta[1])}" style="background:#111827;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none">${escapeHtml(cta[0])}</a></p>`
+    ? `<p style="margin:20px 0"><a href="${escapeHtml(cta[1])}" style="background:${BRAND_BLUE};color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none">${escapeHtml(cta[0])}</a></p>`
     : '';
+  // The app's icon (blue with the white cab) and name at the top, as in the app.
+  const header = `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px"><tr>
+<td style="vertical-align:middle"><img src="${escapeHtml(`${portalUrl()}/icon-192.png`)}" width="40" height="40" alt="" style="display:block;border:0;border-radius:10px" /></td>
+<td style="vertical-align:middle;padding-left:10px;font-size:18px;font-weight:600;color:${BRAND_BLUE}">Cab Booking</td>
+</tr></table>`;
   const html = `<!doctype html><html><body style="font-family:Segoe UI,Arial,sans-serif;color:#111827;line-height:1.5;max-width:600px">
+${header}
 <p>Hello ${escapeHtml(greetingName)},</p>
 ${paragraphs.map((p) => `<p>${p}</p>`).join('\n')}
 ${detailHtml}
