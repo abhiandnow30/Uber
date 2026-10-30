@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCircle2, KeyRound, MapPin, Navigation, PlayCircle, Wrench } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, KeyRound, MapPin, Navigation, PlayCircle } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, Card, DescriptionList, ErrorState, Modal, Select, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
@@ -108,7 +108,7 @@ export function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStart
   };
 
   return (
-    <section className="rounded-xl border-2 border-violet-300 bg-violet-50 p-5 text-center" aria-labelledby="pin-heading">
+    <section className="rounded-xl border-2 border-violet-300 bg-violet-50 p-4 text-center sm:p-5" aria-labelledby="pin-heading">
       <KeyRound className="mx-auto h-8 w-8 text-violet-600" aria-hidden />
       <h2 id="pin-heading" className="mt-2 text-xl font-semibold text-slate-900">
         Enter the passenger&apos;s PIN
@@ -131,13 +131,14 @@ export function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStart
           <label htmlFor="ride-pin" className="sr-only">
             Passenger PIN
           </label>
-          {/* One real input under four digit boxes: tapping anywhere opens the number pad. */}
-          <div className="relative mx-auto flex w-fit gap-3" onClick={() => inputRef.current?.focus()}>
+          {/* One real input under four digit boxes: tapping anywhere opens the number pad. The boxes share the
+              width, so all four always fit, however narrow the phone. */}
+          <div className="relative mx-auto grid w-full max-w-64 grid-cols-4 gap-2 sm:gap-3" onClick={() => inputRef.current?.focus()}>
             {[0, 1, 2, 3].map((i) => (
               <span
                 key={i}
                 className={cn(
-                  'flex h-16 w-14 items-center justify-center rounded-xl border-2 bg-white font-mono text-3xl font-semibold text-slate-900',
+                  'flex aspect-[4/5] w-full items-center justify-center rounded-xl border-2 bg-white font-mono text-3xl font-semibold text-slate-900',
                   i === typed.length && !busy ? 'border-violet-500 ring-2 ring-violet-200' : typed[i] ? 'border-violet-300' : 'border-slate-300',
                 )}
                 aria-hidden
@@ -171,8 +172,17 @@ export function PinPanel({ ride, onStarted, onNotActive }: { ride: Ride; onStart
           <p id="pin-attempts" className="min-h-5 text-sm text-slate-600">
             {remaining !== null ? `${remaining} attempt${remaining === 1 ? '' : 's'} left` : ''}
           </p>
-          <Button type="submit" size="xl" variant="success" loading={busy} disabled={busy || typed.length < 4} icon={<PlayCircle className="h-6 w-6" aria-hidden />}>
-            Verify PIN &amp; start ride
+          {/* Grey until all 4 digits are in (it also starts by itself on the 4th); then solid green. */}
+          <Button
+            type="submit"
+            size="xl"
+            variant="success"
+            className="disabled:bg-slate-200 disabled:text-slate-500"
+            loading={busy}
+            disabled={busy || typed.length < 4}
+            icon={<PlayCircle className="h-6 w-6" aria-hidden />}
+          >
+            Verify &amp; start
           </Button>
         </form>
       )}
@@ -188,7 +198,7 @@ export default function DriverRide() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notActive, setNotActive] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<'cancel' | 'problem' | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [note, setNote] = useState('');
   const [noteDirty, setNoteDirty] = useState(false);
   const [noteBusy, setNoteBusy] = useState(false);
@@ -312,14 +322,9 @@ export default function DriverRide() {
   // Cancel: because of the passenger (not coming, didn't show up). A problem with the cab (puncture,
   // out of fuel) sends the ride back to the coordinator, who gives the passenger another cab.
   const cancelButton = (
-    <div className="grid gap-2 sm:grid-cols-2">
-      <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setDialog('cancel')}>
-        Passenger not coming
-      </Button>
-      <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setDialog('problem')} icon={<Wrench className="h-5 w-5" aria-hidden />}>
-        Cab problem
-      </Button>
-    </div>
+    <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setCancelOpen(true)}>
+      Cancel ride
+    </Button>
   );
 
   const navigateTo = (point: { lat: number; lng: number } | null | undefined, place: string, label: string) => (
@@ -474,20 +479,16 @@ export default function DriverRide() {
         </div>
       </Card>
 
-      <DriverCancelDialog
-        open={dialog === 'cancel'}
+      <RideCancelDialog
+        open={cancelOpen}
         arrived={status === 'ARRIVED'}
-        onClose={() => setDialog(null)}
-        onConfirm={(reason, note) =>
-          confirmAction('cancel', reason === 'NO_SHOW' ? 'Ride closed as no-show' : 'Ride cancelled — the coordinator is informed', { reason, ...(note ? { note } : {}) }).then(() => refetch())
-        }
-      />
-      <CabProblemDialog
-        open={dialog === 'problem'}
         shared={!!ride.tripId}
-        onClose={() => setDialog(null)}
-        onConfirm={(reason, note) =>
+        onClose={() => setCancelOpen(false)}
+        onCabProblem={(reason, note) =>
           confirmAction('problem', 'The coordinator is assigning another cab', { reason, ...(note ? { note } : {}) }).then(() => navigate('/driver'))
+        }
+        onPassenger={(reason, note) =>
+          confirmAction('cancel', reason === 'NO_SHOW' ? 'Ride closed as no-show' : 'Ride cancelled — the coordinator is informed', { reason, ...(note ? { note } : {}) }).then(() => refetch())
         }
       />
     </div>
@@ -631,6 +632,112 @@ export function CabProblemDialog({ open, shared, onClose, onConfirm }: { open: b
         <p className="text-xs text-slate-500">
           {shared ? 'Everyone in this cab not yet picked up' : 'The passenger'} gets another cab from the coordinator, and is told. Passengers already in your cab stay with you.
         </p>
+        {error && <Alert tone="error">{error}</Alert>}
+      </div>
+    </Modal>
+  );
+}
+
+/** Every reason a driver can't do a ride: problems with the cab, or with the passenger. */
+const RIDE_CANCEL_REASONS = {
+  BREAKDOWN: { group: 'cab', label: 'Puncture or breakdown' },
+  FUEL: { group: 'cab', label: 'Out of fuel' },
+  CAB_OTHER: { group: 'cab', label: 'Other problem with the cab' },
+  NOT_COMING: { group: 'passenger', label: 'Passenger said they’re not coming' },
+  NO_SHOW: { group: 'passenger', label: 'Passenger didn’t show up' },
+  OTHER: { group: 'passenger', label: 'Other reason' },
+} as const;
+type RideCancelReason = keyof typeof RIDE_CANCEL_REASONS;
+
+/**
+ * One cancel for the driver. A cab problem hands the passenger (and everyone not yet picked up in a
+ * shared cab) back to the coordinator for another cab; a passenger reason cancels the ride.
+ * "Didn't show up" is offered only at the pickup (after "Arrived"); "Other" reasons need a note.
+ */
+export function RideCancelDialog({
+  open,
+  arrived,
+  shared,
+  onClose,
+  onCabProblem,
+  onPassenger,
+}: {
+  open: boolean;
+  arrived: boolean;
+  shared: boolean;
+  onClose: () => void;
+  onCabProblem: (reason: CabProblemReason, note: string) => Promise<unknown>;
+  onPassenger: (reason: DriverCancelReason, note: string) => Promise<unknown>;
+}) {
+  const [reason, setReason] = useState<RideCancelReason | ''>('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setReason('');
+      setNote('');
+      setError('');
+    }
+  }, [open]);
+  const needsNote = reason === 'OTHER' || reason === 'CAB_OTHER';
+  const cabProblem = !!reason && RIDE_CANCEL_REASONS[reason].group === 'cab';
+  // Saving here would mean giving up the ride, so a chosen reason can only be kept or discarded.
+  const guard = useUnsavedChanges(open && (!!reason || !!note.trim()));
+  const close = () => guard(onClose);
+  const submit = async () => {
+    if (!reason) return setError('Choose a reason');
+    if (needsNote && note.trim().length < 3) return setError('Say what happened');
+    setBusy(true);
+    setError('');
+    try {
+      if (cabProblem) await onCabProblem(reason === 'CAB_OTHER' ? 'OTHER' : (reason as CabProblemReason), note.trim());
+      else await onPassenger(reason as DriverCancelReason, note.trim());
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const option = (r: RideCancelReason) => (
+    <option key={r} value={r}>
+      {RIDE_CANCEL_REASONS[r].label}
+    </option>
+  );
+  return (
+    <Modal
+      open={open}
+      onClose={busy ? () => undefined : close}
+      title="Cancel this ride?"
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={close} disabled={busy}>
+            Keep ride
+          </Button>
+          <Button variant="danger" onClick={submit} loading={busy} disabled={!reason}>
+            Cancel ride
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Select label="Reason" required value={reason} onChange={(e) => setReason(e.target.value as RideCancelReason)}>
+          <option value="">Choose a reason…</option>
+          <optgroup label="Problem with the cab">{(['BREAKDOWN', 'FUEL', 'CAB_OTHER'] as const).map(option)}</optgroup>
+          <optgroup label="Passenger">{(arrived ? (['NOT_COMING', 'NO_SHOW', 'OTHER'] as const) : (['NOT_COMING', 'OTHER'] as const)).map(option)}</optgroup>
+        </Select>
+        {(reason || needsNote) && (
+          <Textarea label={needsNote ? 'What happened?' : 'Details (optional)'} required={needsNote} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
+        )}
+        {reason && (
+          <p className="text-xs text-slate-500">
+            {cabProblem
+              ? `The coordinator assigns another cab to ${shared ? 'everyone in this cab not yet picked up' : 'the passenger'}, who is told. Passengers already in your cab stay with you.`
+              : 'The passenger and the transport coordinator are informed.'}
+          </p>
+        )}
         {error && <Alert tone="error">{error}</Alert>}
       </div>
     </Modal>

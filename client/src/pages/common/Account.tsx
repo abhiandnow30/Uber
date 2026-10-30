@@ -1,59 +1,30 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Home } from 'lucide-react';
-import { Alert, Button, Card, DescriptionList, Input, PageHeader, Select, Textarea, useToast } from '../../components/ui';
-import { errorMessage, patch, post } from '../../lib/api';
+import { Alert, Button, Card, DescriptionList, PageHeader, Select, Textarea, useToast, cn } from '../../components/ui';
+import { errorMessage, patch } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fieldErrors } from '../../lib/hooks';
 import { fmt12h, usePolicy } from '../../lib/policy';
-import { useSsoConfig } from '../../lib/sso';
 import { useUnsavedChanges } from '../../lib/unsaved';
 import { MapLinkField, sameSpot, type LatLng, type MapSpot } from '../../components/LocationPicker';
-import { PasswordFields, passwordOk } from '../public/Activate';
 
+/** Phones: no rounded corners or side borders, so a card meets the screen edges. */
+const EDGE_TO_EDGE = 'max-sm:rounded-none max-sm:border-x-0';
+
+// Everyone signs in with Microsoft (employees, admins) or a mobile number (coordinators, drivers),
+// so there's no password to change here.
 export default function Account() {
   const { me } = useAuth();
-  const { data: sso } = useSsoConfig();
-  const [current, setCurrent] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [msg, setMsg] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const save = async (): Promise<boolean> => {
-    if (!current || !passwordOk(password, confirm)) {
-      setMsg({ tone: 'error', text: 'Fill in your current password and a valid new password first.' });
-      return false;
-    }
-    setBusy(true);
-    setMsg(null);
-    try {
-      await post('/auth/password/change', { currentPassword: current, newPassword: password });
-      setMsg({ tone: 'success', text: 'Password changed.' });
-      setCurrent('');
-      setPassword('');
-      setConfirm('');
-      return true;
-    } catch (err) {
-      setMsg({ tone: 'error', text: errorMessage(err) });
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    void save();
-  };
-  useUnsavedChanges(!!(current || password || confirm), save);
-
   if (!me) return null;
   const profile = (me.profile ?? {}) as Record<string, string>;
+  const employee = me.user.role === 'EMPLOYEE';
 
   return (
     <>
       <PageHeader title="Account" />
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card title="Profile">
+      {/* Phones: the cards run edge to edge (no side margin), giving the details the full width. */}
+      <div className={cn('grid gap-6 max-sm:-mx-4 max-sm:gap-4', employee && 'lg:grid-cols-2')}>
+        <Card title="Profile" className={EDGE_TO_EDGE}>
           <DescriptionList
             items={[
               ['Name', me.user.name],
@@ -63,19 +34,7 @@ export default function Account() {
             ]}
           />
         </Card>
-        {me.user.role === 'EMPLOYEE' && <CabDetailsCard />}
-        {me.user.role !== 'DRIVER' && me.user.role !== 'COORDINATOR' && !(me.user.role === 'EMPLOYEE' && sso?.employeesMicrosoftOnly) && (
-          <Card title="Change password">
-            <form onSubmit={submit} className="space-y-4">
-              <Input label="Current password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
-              <PasswordFields password={password} confirm={confirm} setPassword={setPassword} setConfirm={setConfirm} />
-              {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
-              <Button type="submit" loading={busy} disabled={!current || !passwordOk(password, confirm)}>
-                Update password
-              </Button>
-            </form>
-          </Card>
-        )}
+        {employee && <CabDetailsCard />}
       </div>
     </>
   );
@@ -147,6 +106,7 @@ function CabDetailsCard() {
 
   return (
     <Card
+      className={EDGE_TO_EDGE}
       title={
         <span className="flex items-center gap-2">
           <Home className="h-4 w-4" aria-hidden /> Cab details
@@ -179,7 +139,7 @@ function CabDetailsCard() {
         </p>
         {errors.form && <Alert tone="error">{errors.form}</Alert>}
         <MapLinkField spot={spot} onSpot={setSpot} saved={!pinChanged} required />
-        <Button type="submit" loading={busy} disabled={(!shiftChanged && !addressChanged && !pinChanged) || !addressOk || !spot.pin}>
+        <Button type="submit" className="max-sm:w-full" loading={busy} disabled={(!shiftChanged && !addressChanged && !pinChanged) || !addressOk || !spot.pin}>
           Save
         </Button>
       </form>

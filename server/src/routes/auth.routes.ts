@@ -1,13 +1,13 @@
 import { Router, type Response } from 'express';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { actorFromRequest, requireAuth } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
 import { authLimiter, body, publicFormLimiter } from '../middleware/common.js';
 import { Coordinator } from '../models/Coordinator.js';
 import { Driver } from '../models/Driver.js';
 import { Employee } from '../models/Employee.js';
 import { audit } from '../services/audit.service.js';
-import { activateAccount, adminsUseMicrosoft, changePassword, employeesUseMicrosoftOnly, inspectToken, login, NOT_REGISTERED_MESSAGE, requestPasswordReset, resetPassword } from '../services/auth.service.js';
+import { adminsUseMicrosoft, employeesUseMicrosoftOnly, NOT_REGISTERED_MESSAGE } from '../services/auth.service.js';
 import { CSRF_COOKIE, revokeSessionByToken, SESSION_COOKIE } from '../services/session.service.js';
 import {
   buildLoginUrl,
@@ -38,13 +38,6 @@ function clearAuthCookies(res: Response) {
 }
 
 const meta = (req: { ip?: string; get(h: string): string | undefined }) => ({ ip: req.ip, userAgent: req.get('user-agent') });
-
-authRouter.post('/login', authLimiter, async (req, res) => {
-  const input = body(z.object({ email: z.string().trim().min(3).max(254), password: z.string().min(1).max(200) }), req);
-  const { user, session } = await login(input.email, input.password, meta(req));
-  setAuthCookies(res, session.token, session.csrfToken, session.expiresAt);
-  res.json({ user: { id: user._id, name: user.name, email: user.email, role: user.role }, csrfToken: session.csrfToken });
-});
 
 authRouter.post('/driver-login', authLimiter, async (req, res) => {
   const input = body(z.object({ phone: z.string().trim().min(6).max(25), password: z.string().trim().min(4).max(10) }), req);
@@ -81,45 +74,8 @@ authRouter.get('/me', requireAuth, async (req, res) => {
   });
 });
 
-authRouter.get('/activation/inspect', authLimiter, async (req, res) => {
-  const token = String(req.query.token ?? '');
-  const info = token ? await inspectToken(token, 'ACTIVATION') : null;
-  res.json({ valid: !!info, name: info?.name, email: info?.email });
-});
-
-authRouter.post('/activate', authLimiter, async (req, res) => {
-  const input = body(z.object({ token: z.string().min(10).max(200), password: z.string().max(200) }), req);
-  await activateAccount(input.token, input.password, meta(req));
-  res.json({ ok: true, message: 'Your account is active. You can now sign in.' });
-});
-
-authRouter.post('/password/forgot', publicFormLimiter, async (req, res) => {
-  const input = body(z.object({ email: z.string().trim().email().max(254) }), req);
-  await requestPasswordReset(input.email);
-  res.json({ ok: true, message: 'If an active account exists for this email, a reset link has been sent.' });
-});
-
-authRouter.get('/password/reset/inspect', authLimiter, async (req, res) => {
-  const token = String(req.query.token ?? '');
-  const info = token ? await inspectToken(token, 'PASSWORD_RESET') : null;
-  res.json({ valid: !!info });
-});
-
-authRouter.post('/password/reset', authLimiter, async (req, res) => {
-  const input = body(z.object({ token: z.string().min(10).max(200), password: z.string().max(200) }), req);
-  await resetPassword(input.token, input.password, meta(req));
-  clearAuthCookies(res);
-  res.json({ ok: true, message: 'Password updated. Sign in with your new password.' });
-});
-
-authRouter.post('/password/change', requireAuth, authLimiter, async (req, res) => {
-  const input = body(z.object({ currentPassword: z.string().max(200), newPassword: z.string().max(200) }), req);
-  await changePassword(String(req.auth!.user._id), input.currentPassword, input.newPassword, actorFromRequest(req), req.auth!.sessionId);
-  res.json({ ok: true });
-});
-
 // ---------------------------------------------------------------------------
-// Optional Microsoft Entra ID SSO
+// Microsoft Entra ID SSO (employees and admins)
 // ---------------------------------------------------------------------------
 authRouter.get('/sso/config', (_req, res) => {
   res.json({ enabled: config.ssoEnabled, employeesMicrosoftOnly: employeesUseMicrosoftOnly(), adminsMicrosoft: adminsUseMicrosoft(), notRegisteredMessage: NOT_REGISTERED_MESSAGE });

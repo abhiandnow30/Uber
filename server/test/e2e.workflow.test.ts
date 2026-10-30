@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CabAssignment, CabRequest, TripStatusHistory } from '../src/models/booking.js';
 import { Driver } from '../src/models/Driver.js';
 import { AuditLog, EmailOutbox, Notification } from '../src/models/system.js';
-import { anonymous, drainOutbox, driverLogin, fakeEmail, futureDate, linkFrom, login, makeAdmin, makeCoordinator, type Client } from './helpers.js';
+import { drainOutbox, driverLogin, fakeEmail, futureDate, makeAdmin, makeCoordinator, microsoftSignIn, type Client } from './helpers.js';
 import crypto from 'node:crypto';
 
 /** The complete scenario from the specification, through the public HTTP API only. */
@@ -16,11 +16,10 @@ describe('end-to-end workflow', () => {
     await admin.post('/api/admin/employees', newEmp).expect(201);
     expect((await admin.post('/api/admin/employees', newEmp)).status).toBe(409);
 
-    // 4-5. Invitation email → activation → login
+    // 4-5. No invitation email: the first "Sign in with Microsoft" activates the account
     await drainOutbox();
-    const token = linkFrom(fakeEmail.to('nisha.verma@test.com')[0], '/activate');
-    await anonymous().post('/api/auth/activate', { token, password: 'NishaPass2026' }).expect(200);
-    const emp = await login('nisha.verma@test.com', 'NishaPass2026');
+    expect(fakeEmail.to('nisha.verma@test.com')).toHaveLength(0);
+    const emp = await microsoftSignIn('nisha.verma@test.com');
 
     // 6. Coordinator adds the driver (no separate verification step)
     const d = await coord.post('/api/ops/drivers', {

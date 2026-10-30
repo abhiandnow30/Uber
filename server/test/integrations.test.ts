@@ -10,8 +10,7 @@ import { EmailSendError, GraphEmailProvider, setEmailProvider, SmtpEmailProvider
 import { smtpFrom } from '../src/services/email/smtp.js';
 import { enqueueEmail } from '../src/services/notification.service.js';
 import { buildLoginUrl, completeLogin, issueRegistrationTicket, setSsoClient } from '../src/services/sso.service.js';
-import { AuthToken } from '../src/models/system.js';
-import { anonymous, drainOutbox, fakeEmail, linkFrom, login, makeAdmin, makeEmployee, makeUser, PASSWORD } from './helpers.js';
+import { anonymous, drainOutbox, fakeEmail, makeAdmin, makeEmployee, makeUser } from './helpers.js';
 
 // ===========================================================================
 // Microsoft Graph sendMail provider (fetch is stubbed; no network)
@@ -219,78 +218,37 @@ describe('Entra ID single sign-on', () => {
     expect(await User.exists({ email: 't@company.com' })).toBeNull();
   });
 
-  it('nobody but the password fallback uses passwords once Microsoft sign-in is on (employees and admins)', async () => {
-    const emp = await makeEmployee({ email: 'pw.emp@company.com' });
-    // signed in before Microsoft sign-in was switched on
-    Object.assign(config, { ssoEnabled: false });
+  it('admin-added employees get no email; they activate on their first Microsoft sign-in', async () => {
     const { client: admin } = await makeAdmin();
-    Object.assign(config, { ssoEnabled: true });
-    const res = await anonymous().post('/api/auth/login', { email: 'pw.emp@company.com', password: PASSWORD });
-    expect(res.status).toBe(401);
-    // identical to an unknown account, so the form doesn't reveal who is an employee
-    const unknown = await anonymous().post('/api/auth/login', { email: 'nobody@company.com', password: PASSWORD });
-    expect(res.body.error.message).toBe(unknown.body.error.message);
-    expect(res.body.error.message).toContain('Sign in with Microsoft');
-    expect((await User.findById(emp.user._id))!.failedLoginCount ?? 0).toBe(0);
-
-    // no reset email for employees
-    await expect((await anonymous().post('/api/auth/password/forgot', { email: 'pw.emp@company.com' })).status).toBeLessThan(300);
-    await drainOutbox();
-    expect(fakeEmail.to('pw.emp@company.com')).toHaveLength(0);
-
-    // admin-added employees get no activation email; they activate on first Microsoft sign-in
     const created = await admin.post('/api/admin/employees', { employeeId: 'MS1', fullName: 'Ms Only', email: 'ms.only@company.com', officeLocation: 'HYD' });
     expect(created.status).toBe(201);
     await drainOutbox();
     expect(fakeEmail.to('ms.only@company.com')).toHaveLength(0);
-    expect(await AuthToken.countDocuments({ user: created.body.user })).toBe(0);
-    expect((await admin.post(`/api/admin/employees/${created.body._id}/invitation`)).status).toBe(409);
+    expect((await User.findById(created.body.user))!.status).toBe('INVITED');
+    expect((await admin.post(`/api/admin/employees/${created.body._id}/invitation`)).status).toBe(404);
     expect((await signIn({ oid: 'oid-ms1', tid: 'tenant-1', preferred_username: 'ms.only@company.com' })).ok).toBe(true);
-
-    // an existing admin session keeps working, but admins can no longer sign in with a password
-    expect((await admin.get('/api/auth/me')).status).toBe(200);
-    expect((await anonymous().post('/api/auth/login', { email: 'admin@test.com', password: PASSWORD })).status).toBe(401);
+    expect(await User.findById(created.body.user).lean()).toMatchObject({ status: 'ACTIVE', entraOid: 'oid-ms1' });
   });
 
-  it('activation links already sent to employees stop working once Microsoft sign-in is on', async () => {
-    Object.assign(config, { ssoEnabled: false });
-    const { client: admin } = await makeAdmin();
-    await admin.post('/api/admin/employees', { employeeId: 'OLD1', fullName: 'Old Link', email: 'old.link@company.com', officeLocation: 'HYD' }).expect(201);
-    await drainOutbox();
-    const token = linkFrom(fakeEmail.to('old.link@company.com')[0], '/activate');
-    Object.assign(config, { ssoEnabled: true });
-    const res = await anonymous().post('/api/auth/activate', { token, password: 'SomePass2026' });
-    expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('MICROSOFT_SIGN_IN_ONLY');
-    expect((await User.findOne({ email: 'old.link@company.com' }))!.status).toBe('INVITED');
-  });
-
-  it('employees have no password to change', async () => {
-    Object.assign(config, { ssoEnabled: false });
-    const emp = await makeEmployee();
-    const client = await login(emp.user.email);
-    Object.assign(config, { ssoEnabled: true });
-    const res = await client.post('/api/auth/password/change', { currentPassword: PASSWORD, newPassword: 'NewPassword2026' });
-    expect(res.status).toBe(403);
-  });
-
-  it('admins added on the Admins page sign in with Microsoft; no set-password email is sent', async () => {
-    Object.assign(config, { ssoEnabled: false });
-    const { client: boot } = await makeAdmin('bootstrap.admin@company.com'); // signed in before Microsoft sign-in was on
-    Object.assign(config, { ssoEnabled: true });
+  it('admins added on the Admins page sign in with Microsoft; no email is sent', async () => {
+    const { client: boot } = await makeAdmin('bootstrap.admin@company.com');
     const added = await boot.post('/api/admin/admins', { fullName: 'Real Admin', email: 'real.admin@company.com', phone: '9000050005' });
     expect(added.status).toBe(201);
     await drainOutbox();
     expect(fakeEmail.to('real.admin@company.com')).toHaveLength(0);
-    expect(await AuthToken.countDocuments({ user: added.body._id })).toBe(0);
-    expect((await boot.post(`/api/admin/admins/${added.body._id}/invitation`)).status).toBe(409);
+    expect((await boot.post(`/api/admin/admins/${added.body._id}/invitation`)).status).toBe(404);
 
     const r = await signIn({ oid: 'oid-real-admin', tid: 'tenant-1', preferred_username: 'Real.Admin@company.com' });
     expect(r.ok).toBe(true);
     expect(await User.findById(added.body._id).lean()).toMatchObject({ status: 'ACTIVE', entraOid: 'oid-real-admin' });
+  });
 
-    // with Microsoft sign-in on, admin passwords no longer work
-    expect((await anonymous().post('/api/auth/login', { email: 'bootstrap.admin@company.com', password: PASSWORD })).status).toBe(401);
+  it('an inactive account that never signed in can be reactivated and then signs in with Microsoft', async () => {
+    const { client: admin } = await makeAdmin();
+    const created = await admin.post('/api/admin/employees', { employeeId: 'MS2', fullName: 'Never Signed', email: 'never.signed@company.com', officeLocation: 'HYD' }).expect(201);
+    await admin.post(`/api/admin/employees/${created.body._id}/status`, { status: 'INACTIVE', reason: 'On hold' }).expect(200);
+    await admin.post(`/api/admin/employees/${created.body._id}/status`, { status: 'ACTIVE' }).expect(200);
+    expect((await signIn({ oid: 'oid-ms2', tid: 'tenant-1', preferred_username: 'never.signed@company.com' })).ok).toBe(true);
   });
 
   it('drivers cannot sign in with Microsoft either', async () => {

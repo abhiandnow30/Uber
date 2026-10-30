@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Pencil } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import {
+import { CallButton,
   Alert,
   Button,
   Card,
@@ -16,10 +16,9 @@ import {
   StatusBadge,
   type Column,
 } from '../../components/ui';
-import { del, get, post } from '../../lib/api';
+import { get, post } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 import { useAction } from '../../lib/hooks';
-import { useSsoConfig } from '../../lib/sso';
 import { DeleteEmployeeDialog, EmployeeFormModal, type EmployeeRow } from './Employees';
 
 type Booking = {
@@ -39,18 +38,17 @@ type EmployeeDetailData = EmployeeRow & {
   user: string;
   statusReason?: string;
   hasCredentials?: boolean;
-  pendingInvitation: { expiresAt: string; sentAt: string } | null;
   bookingCounts: Record<string, number>;
   bookings: Booking[];
   updatedAt?: string;
 };
 
-type ActionKey = 'activate' | 'deactivate' | 'suspend' | 'reinvite' | 'resend' | 'revoke';
+type ActionKey = 'activate' | 'deactivate' | 'suspend' | 'reinvite';
 
-/** Admin-available actions per account status (mirrors server ACCOUNT_TRANSITIONS; INVITED→ACTIVE only via activation). */
+/** Admin-available actions per account status (mirrors server ACCOUNT_TRANSITIONS; INVITED→ACTIVE only via first Microsoft sign-in). */
 const ACTIONS_BY_STATUS: Record<string, ActionKey[]> = {
   PENDING_ADMIN_REVIEW: ['reinvite'],
-  INVITED: ['resend', 'revoke', 'deactivate'],
+  INVITED: ['deactivate'],
   ACTIVE: ['suspend', 'deactivate'],
   SUSPENDED: ['activate', 'deactivate'],
   INACTIVE: ['activate', 'reinvite'],
@@ -63,7 +61,6 @@ export default function EmployeeDetail() {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
-  const msOnly = !!useSsoConfig().data?.employeesMicrosoftOnly;
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['admin-employee', id],
     queryFn: ({ signal }) => get<EmployeeDetailData>(`/admin/employees/${id}`, signal),
@@ -75,26 +72,14 @@ export default function EmployeeDetail() {
     invalidate,
     silentError: true,
   });
-  const resend = useAction(() => post<{ expiresAt: string }>(`/admin/employees/${id}/invitation`), {
-    success: (r) => `Invitation sent. Link expires ${fmtDateTime(r.expiresAt)}`,
-    invalidate,
-    silentError: true,
-  });
-  const revoke = useAction(() => del<{ revoked: number }>(`/admin/employees/${id}/invitation`), {
-    success: (r) => (r.revoked ? `Revoked ${r.revoked} invitation link(s)` : 'No outstanding invitation links'),
-    invalidate,
-    silentError: true,
-  });
 
   if (isLoading) return <Spinner />;
   if (error || !data) return <ErrorState error={error} onRetry={refetch} />;
 
   const status = data.status ?? '';
-  // An INACTIVE account that never completed activation cannot be re-activated directly; it must be re-invited.
+  // An INACTIVE account that never signed in goes back to "Invited" (active on first Microsoft sign-in).
   const available = (ACTIONS_BY_STATUS[status] ?? [])
-    .filter((a) => !(status === 'INACTIVE' && ((a === 'activate' && !data.hasCredentials) || (a === 'reinvite' && data.hasCredentials))))
-    // Microsoft-only employees have no activation links to send or revoke.
-    .filter((a) => !(msOnly && (a === 'resend' || a === 'revoke')));
+    .filter((a) => !(status === 'INACTIVE' && ((a === 'activate' && !data.hasCredentials) || (a === 'reinvite' && data.hasCredentials))));
   const totalBookings = Object.values(data.bookingCounts).reduce((a, b) => a + b, 0);
 
   const actionDefs: Record<ActionKey, { label: string; variant: 'primary' | 'secondary' | 'danger' | 'success'; title: string; message: ReactNode; reasonLabel?: string; run: (reason: string) => Promise<unknown>; tone?: 'danger' | 'primary' }> = {
@@ -116,7 +101,7 @@ export default function EmployeeDetail() {
       title: 'Deactivate account',
       message: (
         <>
-          <p>{data.fullName} will be signed out everywhere and will no longer be able to sign in. Outstanding invitation links are revoked.</p>
+          <p>{data.fullName} will be signed out everywhere and will no longer be able to sign in.</p>
           <p className="mt-2">Open or upcoming bookings are not cancelled automatically; they are flagged for review by operations.</p>
         </>
       ),
@@ -136,27 +121,8 @@ export default function EmployeeDetail() {
       variant: 'primary',
       title: 'Re-invite employee',
       tone: 'primary',
-      message: msOnly ? (
-        <p>The account moves to “Invited” and becomes active the next time {data.fullName} signs in with Microsoft.</p>
-      ) : (
-        <p>The account moves to “Invited” and a new activation email is sent to {data.email}.</p>
-      ),
+      message: <p>The account moves to “Invited” and becomes active the next time {data.fullName} signs in with Microsoft.</p>,
       run: () => setStatus.mutateAsync({ status: 'INVITED' }),
-    },
-    resend: {
-      label: 'Resend invitation',
-      variant: 'secondary',
-      title: 'Resend invitation',
-      tone: 'primary',
-      message: <p>A new activation link will be emailed to {data.email}. Earlier links stop working.</p>,
-      run: () => resend.mutateAsync(undefined),
-    },
-    revoke: {
-      label: 'Revoke invitation',
-      variant: 'secondary',
-      title: 'Revoke invitation',
-      message: <p>All outstanding activation links for {data.email} will stop working. The account stays “Invited” until you resend or deactivate it.</p>,
-      run: () => revoke.mutateAsync(undefined),
     },
   };
   const current = action ? actionDefs[action] : null;
@@ -230,7 +196,7 @@ export default function EmployeeDetail() {
               ['Employee ID', <span className="font-mono">{data.employeeId}</span>],
               ['Full name', data.fullName],
               ['Email', data.email],
-              ['Phone', data.phone || '—'],
+              ['Phone', data.phone ? <CallButton key="call" phone={data.phone} name={data.fullName} /> : '—'],
               ['Office', data.officeLocation || '—'],
               ['Route (cab)', data.route || 'Unknown'],
               ['Present address', data.homeAddress || 'Not provided yet'],
@@ -247,22 +213,7 @@ export default function EmployeeDetail() {
               ['Last login', fmtDateTime(data.lastLoginAt)],
               ['Invited', fmtDateTime(data.invitedAt)],
               ['Activated', fmtDateTime(data.activatedAt)],
-              [
-                'Pending invitation',
-                data.pendingInvitation ? (
-                  <span>
-                    Sent {fmtDateTime(data.pendingInvitation.sentAt)}
-                    <br />
-                    <span className="text-xs text-slate-500">Expires {fmtDateTime(data.pendingInvitation.expiresAt)}</span>
-                  </span>
-                ) : status === 'INVITED' && msOnly ? (
-                  'Not needed: activates on first Microsoft sign-in'
-                ) : status === 'INVITED' ? (
-                  <span className="text-amber-700">No valid link outstanding — resend the invitation</span>
-                ) : (
-                  'None'
-                ),
-              ],
+              ['Sign-in', status === 'INVITED' ? 'Microsoft (activates on first sign-in)' : 'Microsoft'],
             ]}
           />
         </Card>

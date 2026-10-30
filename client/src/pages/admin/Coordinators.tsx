@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
+import { CallButton,
   Alert,
   Button,
   Checkbox,
@@ -194,7 +194,7 @@ export default function Coordinators() {
         </div>
       ),
     },
-    { key: 'phone', header: 'Phone', render: (c) => c.phone || '—' },
+    { key: 'phone', header: 'Phone', render: (c) => (c.phone ? <CallButton phone={c.phone} name={c.fullName} /> : '—') },
     { key: 'offices', header: 'Offices', render: (c) => c.officeLocations.join(', ') || '—' },
     { key: 'status', header: 'Status', render: (c) => <StatusBadge status={c.user?.status} /> },
     { key: 'login', header: 'Last login', render: (c) => <span className="whitespace-nowrap">{fmtDateTime(c.user?.lastLoginAt)}</span> },

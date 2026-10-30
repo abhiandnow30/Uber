@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CheckCircle2, Circle } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import {
+import { CallButton,
   Alert,
   Button,
   Card,
@@ -20,7 +20,7 @@ import {
 } from '../../components/ui';
 import { get, post } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtRelative, fmtTravelDate, humanize, mapsDirectionsUrl } from '../../lib/format';
-import { ASSIGNABLE, PoolBar, REASSIGNABLE, type BookingRow } from './Bookings';
+import { ASSIGNABLE, CANCEL_REASONS, PoolBar, REASSIGNABLE, type BookingRow } from './Bookings';
 
 type Person = { _id: string; name: string } | null | undefined;
 type Assignment = {
@@ -138,6 +138,9 @@ type ActionDef = {
   tone?: 'danger' | 'primary';
   reasonLabel?: string;
   reasonMinLength?: number;
+  // Ready-made reasons to pick from, and the label of the button that closes without acting.
+  reasons?: readonly string[];
+  keep?: string;
   path: string;
   success: string;
   withReason: boolean;
@@ -228,6 +231,8 @@ export default function BookingDetail() {
               : `Cancel ${b.reference}? The employee will be notified.`,
             confirmLabel: 'Cancel booking',
             reasonLabel: 'Cancellation reason',
+            reasons: CANCEL_REASONS,
+            keep: 'Keep booking',
             path: 'cancel',
             success: 'Booking cancelled',
             withReason: true,
@@ -499,7 +504,7 @@ export default function BookingDetail() {
           </Alert>
         )}
 
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
           <Card title="Trip" className="lg:col-span-2">
             <DescriptionList
               items={[
@@ -537,13 +542,13 @@ export default function BookingDetail() {
                 ['Name', b.employee?.fullName],
                 ['Employee ID', b.employee?.employeeId],
                 ['Email', b.employee?.email],
-                ['Phone', b.employee?.phone || null],
+                ['Phone', b.employee?.phone ? <CallButton key="call" phone={b.employee.phone} name={b.employee.fullName} /> : null],
               ]}
             />
           </Card>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
           <Card title="Current assignment" className="lg:col-span-2">
             {!current ? (
               <EmptyState
@@ -566,7 +571,7 @@ export default function BookingDetail() {
                         '—'
                       ),
                     ],
-                    ['Driver phone', current.driver?.phone ?? null],
+                    ['Driver phone', current.driver?.phone ? <CallButton key="call" phone={current.driver.phone} name={current.driver.fullName} /> : null],
                     [
                       'Cab',
                       current.vehicle ? (
@@ -622,7 +627,7 @@ export default function BookingDetail() {
           <DataTable columns={assignmentCols} rows={b.assignments} rowKey={(a) => a._id} empty={<EmptyState title="No assignments yet" />} />
         </Card>
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-2 max-lg:[&>*]:min-w-0">
           <Card title="Status history">
             {!b.history.length ? (
               <EmptyState title="No events yet" />
@@ -663,6 +668,8 @@ export default function BookingDetail() {
           tone={def.tone ?? 'danger'}
           reasonLabel={def.reasonLabel}
           reasonMinLength={def.reasonMinLength}
+          reasons={def.reasons}
+          cancelLabel={def.keep}
         />
       )}
       {assignMode && <PoolBar key={assignMode} rides={[asRow]} change={assignMode === 'reassign'} startOpen onClear={() => setAssignMode(null)} onDone={() => setAssignMode(null)} />}

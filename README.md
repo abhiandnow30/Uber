@@ -31,19 +31,19 @@ npm run dev:memdb                      # API on :4000 + web on http://localhost:
 
 ### Development test accounts (seed only)
 
-All seed accounts use the password `Password123!`. The seed script refuses to run when `NODE_ENV=production`.
+Admins and employees sign in with Microsoft (Entra ID must be configured); coordinators and drivers use their own sign-in pages. The seed script refuses to run when `NODE_ENV=production`.
 
 | Role | Email |
 |---|---|
-| Admin | admin@example.com |
+| Admin | *Sign in with Microsoft*: admin@example.com |
 | Coordinator (HYD, BLR) | *Coordinator sign-in*: coordinator@example.com + mobile 9000000001 |
-| Employee (EMP1001, HYD) | employee@example.com |
+| Employee (EMP1001, HYD) | *Sign in with Microsoft*: employee@example.com |
 | Driver (DRV001, vehicle TS09AB1234) | *Driver sign-in*: mobile 9000020001, vehicle 1234 |
 | Driver (DRV002, vehicle TS09CD5678) | *Driver sign-in*: mobile 9000020002, vehicle 5678 |
 
 ### Emails in development
 
-With `EMAIL_MODE=mock` nothing is sent. Each email is written as an HTML file to `server/.dev-mailbox/`, so you can open activation and password-reset links locally. Mock mode is a clearly marked development stand-in, and the server refuses to start with it in production.
+With `EMAIL_MODE=mock` nothing is sent. Each email is written as an HTML file to `server/.dev-mailbox/`, so you can open them locally. Mock mode is a clearly marked development stand-in, and the server refuses to start with it in production.
 
 ## Scripts
 
@@ -57,14 +57,14 @@ With `EMAIL_MODE=mock` nothing is sent. Each email is written as an HTML file to
 | `npm start` | Run the built server; it also serves `client/dist` |
 | `npm run migrate -w server` | Create collections, indexes and the default policy (idempotent) |
 | `npm run seed` | Development seed data |
-| `npm run create-admin -w server -- --email <email> --name "<name>"` | Create the first administrator (works in production; sends an activation invitation, never sets a password) |
+| `npm run create-admin -w server -- --email <email> --name "<name>"` | Create the first administrator (works in production; the admin activates on their first Microsoft sign-in, no email is sent) |
 
 ## How the key workflows are protected
 
 - **Authorization** is enforced on the server for every route: a role gate plus resource-level checks. Employees only ever query by their own user id, drivers by their own driver profile, and coordinators by their assigned offices. Hiding things in the UI is never relied on. Requests for a record you don't own return 404, so the API doesn't reveal that it exists.
-- **Sessions** are random tokens in an `httpOnly` `SameSite=Lax` cookie. Only an HMAC of the token is stored, which makes sessions revocable. They have absolute and idle expiry and are revoked on logout, password reset, suspension and deactivation. CSRF protection uses a required `X-Requested-With` header plus a session-bound token echoed in `X-CSRF-Token`.
-- **Passwords** are hashed with scrypt. Five failed sign-ins lock the account for 15 minutes. Activation and reset tokens are single-use, stored hashed, expire, and are consumed atomically.
-- **Login messages**: unknown accounts and wrong passwords get the same message, to prevent account enumeration. Colleagues who sign in with Microsoft but aren't registered get the self-registration form; if they can't register (email outside `ALLOWED_EMAIL_DOMAINS` or already used), they're asked to contact an administrator, who adds them under *Employees*.
+- **Sessions** are random tokens in an `httpOnly` `SameSite=Lax` cookie. Only an HMAC of the token is stored, which makes sessions revocable. They have absolute and idle expiry and are revoked on logout, suspension and deactivation. CSRF protection uses a required `X-Requested-With` header plus a session-bound token echoed in `X-CSRF-Token`.
+- **Sign-in**: employees and admins sign in only with Microsoft (Entra ID); there are no email + password accounts. Coordinators sign in with email + mobile number and drivers with mobile number + its first 4 digits; repeated failures lock that sign-in for a while.
+- **Login messages**: wrong coordinator and driver details all get the same message, to prevent account enumeration. Colleagues who sign in with Microsoft but aren't registered get the self-registration form; if they can't register (email outside `ALLOWED_EMAIL_DOMAINS` or already used), they're asked to contact an administrator, who adds them under *Employees*.
 - **Double-booking**: assignments run in a MongoDB transaction that first bumps a lock counter on the driver and vehicle documents. Concurrent transactions for the same driver or vehicle hit a write conflict and are retried; the retry then sees the committed overlap and fails with `SCHEDULE_CONFLICT`. Partial unique indexes back this up: one active assignment per booking, one open booking per employee per pickup time, and one current link per driver and per vehicle. A retried *Assign* click with the same `Idempotency-Key` returns the original assignment.
 - **Ride-start PIN**: 4 digits from `crypto.randomInt`. For verification the server stores `HMAC-SHA256(PIN_HMAC_KEY, salt:pin)`, a keyed hash, so a database leak alone does not reveal it. A separate AES-256-GCM copy lets **only the assigned employee** view the PIN again in their authenticated booking page. Plaintext is never stored, logged, emailed or sent to drivers. Each attempt is reserved atomically before comparison, so parallel guessing can't exceed the limit (5 by default, then locked). The PIN expires, and the trip start is one transaction of conditional updates, so duplicate submissions start a trip exactly once. Reassignment, cancellation, completion and override all revoke the PIN.
 - **State machines** for accounts and bookings live in `server/src/domain.ts`. Every status change is a conditional update against the expected previous state, and each one writes to the trip status history. Clients can't set a status directly.

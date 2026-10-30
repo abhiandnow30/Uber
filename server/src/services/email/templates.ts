@@ -1,8 +1,6 @@
 import { config } from '../../config.js';
 
 export const EMAIL_TEMPLATES = [
-  'ACCOUNT_INVITATION',
-  'PASSWORD_RESET',
   'ACCESS_REQUEST_INFO_REQUESTED',
   'ACCESS_REQUEST_REJECTED',
   'BOOKING_SUBMITTED',
@@ -81,34 +79,9 @@ function bookingDetails(p: Params): Array<[string, unknown]> {
   ];
 }
 
-export function renderEmail(template: EmailTemplate, p: Params, secret: Record<string, string> = {}): RenderedEmail {
+export function renderEmail(template: EmailTemplate, p: Params): RenderedEmail {
   const name = p.name;
   switch (template) {
-    case 'ACCOUNT_INVITATION': {
-      const { html, text } = layout(
-        name,
-        [
-          'You have been invited to the Employee Cab Booking Portal.',
-          `Use the button below to activate your account. This single-use link expires on ${escapeHtml(p.expiresAt)}.`,
-          'If you did not expect this invitation, you can ignore this email.',
-        ],
-        undefined,
-        ['Activate your account', secret.activationUrl ?? portalUrl()],
-      );
-      return { subject: 'Activate your Employee Cab Booking account', html, text };
-    }
-    case 'PASSWORD_RESET': {
-      const { html, text } = layout(
-        name,
-        [
-          'We received a request to reset your Employee Cab Booking Portal password.',
-          `This single-use link expires in ${escapeHtml(p.expiresInMinutes)} minutes. If you did not request this, ignore this email; your password will not change.`,
-        ],
-        undefined,
-        ['Reset password', secret.resetUrl ?? portalUrl()],
-      );
-      return { subject: 'Reset your Employee Cab Booking password', html, text };
-    }
     case 'ACCESS_REQUEST_INFO_REQUESTED': {
       const { html, text } = layout(name, [
         'Your request for access to the Employee Cab Booking Portal needs more information before it can be reviewed.',
@@ -232,5 +205,8 @@ export function renderEmail(template: EmailTemplate, p: Params, secret: Record<s
       );
       return { subject: `Need a cab for ${p.shiftDate}? Request it today`, html, text };
     }
+    default:
+      // e.g. an old queued email whose template no longer exists
+      throw new Error(`Unknown email template: ${String(template)}`);
   }
 }

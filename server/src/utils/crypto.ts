@@ -1,47 +1,12 @@
 import crypto from 'node:crypto';
-import { promisify } from 'node:util';
 import { config } from '../config.js';
 
-const scrypt = promisify(crypto.scrypt) as (
-  password: crypto.BinaryLike,
-  salt: crypto.BinaryLike,
-  keylen: number,
-  options: crypto.ScryptOptions,
-) => Promise<Buffer>;
-
-const SCRYPT_PARAMS = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
-
-/** Password hash format: scrypt$N$r$p$saltB64$hashB64 */
-export async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.randomBytes(16);
-  const hash = await scrypt(password.normalize('NFKC'), salt, 64, SCRYPT_PARAMS);
-  return ['scrypt', SCRYPT_PARAMS.N, SCRYPT_PARAMS.r, SCRYPT_PARAMS.p, salt.toString('base64'), hash.toString('base64')].join('$');
-}
-
-export async function verifyPassword(password: string, stored: string | undefined | null): Promise<boolean> {
-  if (!stored) {
-    // Spend comparable time to avoid user-existence timing oracle.
-    await scrypt('dummy-password', 'dummy-salt-value', 64, SCRYPT_PARAMS);
-    return false;
-  }
-  const [alg, n, r, p, saltB64, hashB64] = stored.split('$');
-  if (alg !== 'scrypt') return false;
-  const expected = Buffer.from(hashB64, 'base64');
-  const actual = await scrypt(password.normalize('NFKC'), Buffer.from(saltB64, 'base64'), expected.length, {
-    N: Number(n),
-    r: Number(r),
-    p: Number(p),
-    maxmem: SCRYPT_PARAMS.maxmem,
-  });
-  return crypto.timingSafeEqual(actual, expected);
-}
-
-/** Opaque random token for sessions, activation, password reset, CSRF. */
+/** Opaque random token for sessions and CSRF. */
 export function randomToken(bytes = 32): string {
   return crypto.randomBytes(bytes).toString('base64url');
 }
 
-/** Keyed hash for storing high-entropy tokens (sessions, activation, reset). */
+/** Keyed hash for storing high-entropy tokens (sessions). */
 export function hashToken(token: string): string {
   return crypto.createHmac('sha256', config.TOKEN_HMAC_KEY).update(token).digest('hex');
 }

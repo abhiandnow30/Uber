@@ -5,12 +5,12 @@ import { withTransaction, type TxContext } from '../db.js';
 import { OPEN_STATUSES } from '../domain.js';
 import { CabRequest } from '../models/booking.js';
 import { Employee, EMPLOYEE_EDITABLE_FIELDS } from '../models/Employee.js';
-import { AuthToken, Notification, Session } from '../models/system.js';
+import { Notification, Session } from '../models/system.js';
 import { User } from '../models/User.js';
 import { AppError, badRequest, conflict, notFound, validationError } from '../utils/errors.js';
 import { escapeRegex, paged, resolveSort, type Pagination } from '../utils/listing.js';
 import { audit, type Actor } from './audit.service.js';
-import { employeesUseMicrosoftOnly, issueActivation, normalizeEmail } from './auth.service.js';
+import { normalizeEmail } from './auth.service.js';
 import { cancelBookingInternal } from './booking.service.js';
 import { activeOfficeCodes, getPolicy } from './policy.service.js';
 import { revokeAllSessions } from './session.service.js';
@@ -71,7 +71,7 @@ async function assertOffice(code: string) {
 export async function createEmployee(
   actor: Actor,
   input: EmployeeInput,
-  opts: { sendInvitation?: boolean; source?: 'MANUAL' | 'ACCESS_REQUEST' | 'SSO' | 'SEED' } = {},
+  opts: { source?: 'MANUAL' | 'ACCESS_REQUEST' | 'SSO' | 'SEED' } = {},
   outerTx?: TxContext,
 ) {
   await assertOffice(input.officeLocation);
@@ -93,8 +93,7 @@ export async function createEmployee(
       [{ ...input, user: user._id, source: opts.source ?? 'MANUAL' }],
       { session },
     );
-    // With Microsoft-only sign-in the account activates on the employee's first Microsoft sign-in.
-    if (opts.sendInvitation !== false && !employeesUseMicrosoftOnly()) await issueActivation(user, actor, session);
+    // The account activates on the employee's first Microsoft sign-in.
     await audit(
       actor,
       'EMPLOYEE_CREATED',
@@ -128,8 +127,6 @@ export async function updateEmployee(actor: Actor, id: string, patch: z.infer<ty
       changes.email = { from: employee.email, to: patch.email };
       employee.email = patch.email;
       await User.updateOne({ _id: employee.user }, { $set: { email: patch.email } }, { session });
-      // Outstanding invitation links were sent to the old address: revoke them.
-      await AuthToken.updateMany({ user: employee.user, usedAt: null, revokedAt: null }, { $set: { revokedAt: new Date() } }, { session });
     }
     if (patch.fullName || patch.phone !== undefined) {
       await User.updateOne(
@@ -201,13 +198,10 @@ export async function listEmployees(p: Pagination, f: z.infer<typeof employeeLis
 export async function getEmployee(id: string) {
   const employee = await Employee.findOne({ _id: id, deletedAt: null }).lean();
   if (!employee) throw notFound('Employee');
-  const user = await User.findById(employee.user).select('+passwordHash').lean();
-  const [bookings, counts, pendingInvite] = await Promise.all([
+  const user = await User.findById(employee.user).lean();
+  const [bookings, counts] = await Promise.all([
     CabRequest.find({ employee: employee._id }).sort({ scheduledPickupAt: -1 }).limit(50).lean(),
     CabRequest.aggregate([{ $match: { employee: employee._id } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
-    AuthToken.findOne({ user: employee.user, purpose: 'ACTIVATION', usedAt: null, revokedAt: null, expiresAt: { $gt: new Date() } })
-      .select('expiresAt createdAt')
-      .lean(),
   ]);
   return {
     ...employee,
@@ -216,38 +210,11 @@ export async function getEmployee(id: string) {
     lastLoginAt: user?.lastLoginAt,
     invitedAt: user?.invitedAt,
     activatedAt: user?.activatedAt,
-    // Whether the account can be re-activated directly (has signed in before) or must be re-invited.
-    hasCredentials: !!(user?.passwordHash || user?.entraOid),
-    pendingInvitation: pendingInvite ? { expiresAt: pendingInvite.expiresAt, sentAt: pendingInvite.createdAt } : null,
+    // Whether the employee has signed in with Microsoft before.
+    hasCredentials: !!user?.entraOid,
     bookingCounts: Object.fromEntries(counts.map((c) => [c._id, c.n])),
     bookings,
   };
-}
-
-export async function resendInvitation(actor: Actor, employeeId: string) {
-  const employee = await Employee.findById(employeeId).lean();
-  if (!employee) throw notFound('Employee');
-  return withTransaction(async ({ session }) => {
-    const user = await User.findById(employee.user).session(session);
-    if (!user) throw notFound('User');
-    if (user.status !== 'INVITED') {
-      throw new AppError(409, 'INVALID_STATE', `Invitations can only be sent to accounts in INVITED status (current: ${user.status})`);
-    }
-    const res = await issueActivation(user, actor, session);
-    await audit(actor, 'INVITATION_SENT', 'User', user._id, `Activation invitation (re)sent to ${user.email}`, undefined, session);
-    return res;
-  });
-}
-
-export async function revokeInvitation(actor: Actor, employeeId: string) {
-  const employee = await Employee.findById(employeeId).lean();
-  if (!employee) throw notFound('Employee');
-  const res = await AuthToken.updateMany(
-    { user: employee.user, purpose: 'ACTIVATION', usedAt: null, revokedAt: null },
-    { $set: { revokedAt: new Date() } },
-  );
-  await audit(actor, 'INVITATION_REVOKED', 'User', employee.user, `Outstanding invitations revoked for ${employee.email}`, { count: res.modifiedCount });
-  return { revoked: res.modifiedCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +302,6 @@ export async function deleteEmployee(actor: Actor, id: string, reason: string) {
     if (!hasHistory) {
       await Employee.deleteOne({ _id: employee._id }, { session });
       await User.deleteOne({ _id: employee.user }, { session });
-      await AuthToken.deleteMany({ user: employee.user }, { session });
       await Notification.deleteMany({ user: employee.user }, { session });
     } else {
       const now = new Date();
@@ -345,7 +311,6 @@ export async function deleteEmployee(actor: Actor, id: string, reason: string) {
         { session },
       );
       await User.updateOne({ _id: employee.user }, { $set: { status: 'INACTIVE', statusReason: `Deleted: ${reason}`, statusChangedAt: now }, $unset: { phone: 1 } }, { session });
-      await AuthToken.updateMany({ user: employee.user, usedAt: null, revokedAt: null }, { $set: { revokedAt: now } }, { session });
     }
     await audit(actor, 'EMPLOYEE_DELETED', 'Employee', employee._id, summary, { reason, cancelledBookings: open.length, permanent: !hasHistory }, session);
   });

@@ -14,10 +14,10 @@ export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
 
 export const ACCOUNT_TRANSITIONS: Record<AccountStatus, AccountStatus[]> = {
   PENDING_ADMIN_REVIEW: ['INVITED', 'REJECTED'],
-  INVITED: ['ACTIVE', 'INACTIVE'], // ACTIVE only via activation token / SSO first login
+  INVITED: ['ACTIVE', 'INACTIVE'], // ACTIVE only via first sign-in (Microsoft, or mobile number for drivers/coordinators)
   ACTIVE: ['INACTIVE', 'SUSPENDED'],
   SUSPENDED: ['ACTIVE', 'INACTIVE'],
-  INACTIVE: ['INVITED', 'ACTIVE'], // reactivate: ACTIVE if a password already exists, else re-invite
+  INACTIVE: ['INVITED', 'ACTIVE'], // reactivate directly, or back to INVITED (active again on next sign-in)
   REJECTED: ['INVITED'],
 };
 

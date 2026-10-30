@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { withTransaction } from '../db.js';
-import { AuthToken, Notification, Session } from '../models/system.js';
+import { Notification, Session } from '../models/system.js';
 import { User } from '../models/User.js';
 import { badRequest, conflict, notFound } from '../utils/errors.js';
 import { escapeRegex, paged, type Pagination } from '../utils/listing.js';
 import { audit, type Actor } from './audit.service.js';
-import { adminsUseMicrosoft, issueActivation, normalizeEmail } from './auth.service.js';
+import { normalizeEmail } from './auth.service.js';
 import { emailDomainAllowed, PHONE_RE } from './employee.service.js';
 import { revokeAllSessions } from './session.service.js';
 
@@ -27,7 +27,7 @@ export async function listAdmins(p: Pagination) {
       .sort({ name: 1 })
       .skip((p.page - 1) * p.pageSize)
       .limit(p.pageSize)
-      .select('name email phone status statusReason lastLoginAt invitedAt activatedAt createdAt +passwordHash entraOid')
+      .select('name email phone status statusReason lastLoginAt invitedAt activatedAt createdAt entraOid')
       .lean(),
     User.countDocuments(filter),
     User.aggregate([{ $match: { role: 'ADMIN' } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
@@ -35,8 +35,8 @@ export async function listAdmins(p: Pagination) {
   const byStatus = Object.fromEntries(counts.map((c) => [c._id, c.n])) as Record<string, number>;
   return {
     ...paged(
-      // never send the hash; the page only needs to know whether a direct reactivation is possible
-      items.map(({ passwordHash, entraOid, ...u }) => ({ ...u, hasCredentials: !!(passwordHash || entraOid) })),
+      // The page only needs to know whether the admin has signed in with Microsoft before.
+      items.map(({ entraOid, ...u }) => ({ ...u, hasCredentials: !!entraOid })),
       total,
       p,
     ),
@@ -45,8 +45,7 @@ export async function listAdmins(p: Pagination) {
 }
 
 /**
- * Creates an admin in "Invited" status. With Microsoft sign-in they activate on their first
- * Microsoft sign-in; otherwise they get the same set-password email as coordinators.
+ * Creates an admin in "Invited" status. They activate on their first Microsoft sign-in.
  */
 export async function createAdmin(actor: Actor, input: z.infer<typeof adminSchema>) {
   return withTransaction(async ({ session }) => {
@@ -55,7 +54,6 @@ export async function createAdmin(actor: Actor, input: z.infer<typeof adminSchem
       [{ email: input.email, name: input.fullName, phone: input.phone, role: 'ADMIN', status: 'INVITED', statusChangedAt: new Date(), createdBy: actor.id }],
       { session },
     );
-    if (!adminsUseMicrosoft()) await issueActivation(user, actor, session);
     await audit(actor, 'ADMIN_CREATED', 'User', user._id, `Admin ${input.email} created`, undefined, session);
     return { _id: user._id, name: user.name, email: user.email, phone: user.phone, status: user.status };
   });
@@ -74,7 +72,6 @@ export async function deleteAdmin(actor: Actor, id: string) {
   }
   await withTransaction(async ({ session }) => {
     await User.deleteOne({ _id: admin._id }, { session });
-    await AuthToken.deleteMany({ user: admin._id }, { session });
     await Notification.deleteMany({ user: admin._id }, { session });
     await audit(actor, 'ADMIN_DELETED', 'User', admin._id, `Admin ${admin.name} (${admin.email}) deleted`, undefined, session);
   });

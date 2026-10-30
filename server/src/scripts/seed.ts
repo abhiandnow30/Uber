@@ -1,6 +1,6 @@
 /**
  * Development seed data. Refuses to run in production.
- * Creates one account per role (all ACTIVE, known dev passwords), fleet, and a link.
+ * Creates one account per role (all ACTIVE), fleet, and a link.
  */
 import { config } from '../config.js';
 import { connectDatabase, disconnectDatabase } from '../db.js';
@@ -11,7 +11,6 @@ import { DriverVehicleLink } from '../models/fleetHistory.js';
 import { User } from '../models/User.js';
 import { Vehicle } from '../models/Vehicle.js';
 import { getPolicy } from '../services/policy.service.js';
-import { hashPassword } from '../utils/crypto.js';
 import { syncIndexes } from './indexes.js';
 
 if (config.isProd) {
@@ -19,13 +18,10 @@ if (config.isProd) {
   process.exit(1);
 }
 
-const PASSWORD = 'Password123!';
-
 async function upsertUser(email: string, name: string, role: string, phone = '') {
-  const passwordHash = await hashPassword(PASSWORD);
   return User.findOneAndUpdate(
     { email },
-    { $setOnInsert: { email, name, role, phone, status: 'ACTIVE', passwordHash, activatedAt: new Date(), passwordChangedAt: new Date() } },
+    { $setOnInsert: { email, name, role, phone, status: 'ACTIVE', activatedAt: new Date() } },
     { upsert: true, new: true },
   );
 }
@@ -95,11 +91,11 @@ for (let i = 0; i < driversSeed.length; i++) {
 }
 
 console.log(`
-Seed complete. All accounts use password: ${PASSWORD}
-  Admin        admin@example.com
-  Coordinator  coordinator@example.com   (offices HYD, BLR)
-  Employee     employee@example.com      (EMP1001, HYD)
-  Driver       driver@example.com        (DRV001, TS09AB1234)
-  Driver       driver2@example.com       (DRV002, TS09CD5678)
+Seed complete.
+  Admin        admin@example.com         (Sign in with Microsoft)
+  Coordinator  coordinator@example.com   (email + mobile +91 90000 00001; offices HYD, BLR)
+  Employee     employee@example.com      (EMP1001, HYD; Sign in with Microsoft)
+  Driver       driver@example.com        (DRV001, TS09AB1234; mobile +91 90000 20001)
+  Driver       driver2@example.com       (DRV002, TS09CD5678; mobile +91 90000 20002)
 `);
 await disconnectDatabase();

@@ -29,7 +29,7 @@ All configuration is through environment variables (`server/.env.example` docume
 | `NODE_ENV=production` | Enables production safety checks. Startup **fails** if dev secrets, `EMAIL_MODE=mock`, `MONGODB_URI=memory` or `COOKIE_SECURE=false` are detected. |
 | `APP_BASE_URL` | Public HTTPS URL. Used in email links. |
 | `MONGODB_URI` | Replica-set URI with TLS and a least-privilege user (readWrite on the app database only). |
-| `PIN_HMAC_KEY`, `TOKEN_HMAC_KEY` | 32+ random bytes each. Rotating `PIN_HMAC_KEY` invalidates outstanding PINs (coordinators can regenerate them). Rotating `TOKEN_HMAC_KEY` signs everyone out and invalidates outstanding invitation and reset links. |
+| `PIN_HMAC_KEY`, `TOKEN_HMAC_KEY` | 32+ random bytes each. Rotating `PIN_HMAC_KEY` invalidates outstanding PINs (coordinators can regenerate them). Rotating `TOKEN_HMAC_KEY` signs everyone out and invalidates pending Microsoft self-registrations. |
 | `DATA_ENCRYPTION_KEY` | Base64 of exactly 32 bytes (AES-256-GCM). Encrypts the employee-viewable PIN copy and queued email secrets. Rotation: drain the outbox and let active PINs expire, or regenerate them, before switching. |
 | `COOKIE_SECURE=true`, `TRUST_PROXY=<hops>` | Required behind TLS-terminating proxies so client IPs and secure cookies work. |
 | `EMAIL_MODE=graph` + `GRAPH_*` | See the production checklist. |
@@ -61,10 +61,10 @@ curl -f https://<host>/api/health/ready    # readiness (DB ping)
 - **First admin account**: there is no self-registration for admins. Run the bootstrap command once against production:
 
   ```bash
-  docker run --rm --env-file prod.env cab-booking:<version> node server/dist/scripts/create-admin.js --email it.admin@company.com --name "IT Admin" --send-now
+  docker run --rm --env-file prod.env cab-booking:<version> node server/dist/scripts/create-admin.js --email it.admin@company.com --name "IT Admin"
   ```
 
-  It creates an `INVITED` admin and sends the activation email; no password is ever set or printed. Running it again for the same invited admin re-issues the invitation. It refuses to touch any existing non-admin or active account. Don't use the seed script in production; it refuses to run there.
+  It creates an `INVITED` admin who becomes active on their first "Sign in with Microsoft" with that email; no email is sent. Running it again for the same invited admin changes nothing. It refuses to touch any existing non-admin or active account. Don't use the seed script in production; it refuses to run there.
 
 ## 4. Rollback
 

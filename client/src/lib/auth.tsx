@@ -12,7 +12,6 @@ export type Me = {
 type AuthCtx = {
   me: Me | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<unknown>;
 };
@@ -41,16 +40,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [qc]);
 
-  const login = useCallback(
-    async (email: string, password: string) => {
-      await post('/auth/login', { email, password });
-      // Drop the previous user's data, but keep the live "me" query attached so it updates.
-      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== 'me' });
-      await refetch();
-    },
-    [qc, refetch],
-  );
-
   const logout = useCallback(async () => {
     try {
       await post('/auth/logout');
@@ -63,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [qc]);
 
-  return <Ctx.Provider value={{ me: data ?? null, loading: isLoading, login, logout, refresh: refetch }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ me: data ?? null, loading: isLoading, logout, refresh: refetch }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {

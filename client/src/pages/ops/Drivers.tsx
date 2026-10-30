@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, Plate, SearchInput, Select, StatusBadge, useToast, type Column } from '../../components/ui';
+import { CallButton, Alert, Button, Card, DataTable, EmptyState, Input, Modal, PageHeader, Pagination, Plate, SearchInput, Select, StatusBadge, useToast, type Column } from '../../components/ui';
 import { errorMessage, get, patch, post, type Paged } from '../../lib/api';
 import { fieldErrors, useAction, useListState, usePaged } from '../../lib/hooks';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
@@ -219,7 +219,7 @@ export default function Drivers() {
   const columns: Column<DriverRow>[] = [
     { key: 'code', header: 'Driver ID', sortKey: 'driverCode', render: (d) => <Link to={`/ops/drivers/${d._id}`} onClick={(e) => e.stopPropagation()} className="font-medium text-indigo-600 hover:underline">{d.driverCode}</Link> },
     { key: 'name', header: 'Name', sortKey: 'fullName', render: (d) => <span className="whitespace-nowrap font-medium text-slate-900">{d.fullName}</span> },
-    { key: 'phone', header: 'Phone', render: (d) => <span className="whitespace-nowrap">{d.phone}</span> },
+    { key: 'phone', header: 'Phone', render: (d) => <CallButton phone={d.phone} name={d.fullName} /> },
     { key: 'license', header: 'License expiry', sortKey: 'licenseExpiry', render: (d) => <ExpiryText iso={d.licenseExpiry} /> },
     { key: 'avail', header: 'Availability', sortKey: 'availability', render: (d) => <StatusBadge status={d.availability} /> },
     { key: 'duty', header: 'On duty', className: 'hidden 2xl:table-cell', render: (d) => (d.onDuty ? <span className="text-emerald-700">Yes</span> : <span className="text-slate-400">No</span>) },

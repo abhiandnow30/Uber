@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { withTransaction } from '../db.js';
 import { CabAssignment } from '../models/booking.js';
 import { Coordinator } from '../models/Coordinator.js';
-import { AuditLog, AuthToken, Notification, Session } from '../models/system.js';
+import { AuditLog, Notification, Session } from '../models/system.js';
 import { User } from '../models/User.js';
 import { badRequest, conflict, notFound } from '../utils/errors.js';
 import { escapeRegex, paged, type Pagination } from '../utils/listing.js';
@@ -106,13 +106,11 @@ export async function deleteCoordinator(actor: Actor, id: string) {
     if (!hasHistory) {
       await Coordinator.deleteOne({ _id: coord._id }, { session });
       await User.deleteOne({ _id: coord.user }, { session });
-      await AuthToken.deleteMany({ user: coord.user }, { session });
       await Notification.deleteMany({ user: coord.user }, { session });
     } else {
       const now = new Date();
       await Coordinator.updateOne({ _id: coord._id }, { $set: { deletedAt: now, deletedBy: actor.id, officeLocations: [] }, $unset: { phone: 1, shifts: 1 } }, { session });
       await User.updateOne({ _id: coord.user }, { $set: { status: 'INACTIVE', statusReason: 'Deleted', statusChangedAt: now }, $unset: { phone: 1 } }, { session });
-      await AuthToken.updateMany({ user: coord.user, usedAt: null, revokedAt: null }, { $set: { revokedAt: now } }, { session });
     }
     await audit(actor, 'COORDINATOR_DELETED', 'Coordinator', coord._id, `Coordinator ${coord.fullName} (${coord.email}) deleted`, { permanent: !hasHistory }, session);
   });

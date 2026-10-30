@@ -7,11 +7,9 @@ import { Coordinator } from '../models/Coordinator.js';
 import { Driver } from '../models/Driver.js';
 import { Employee } from '../models/Employee.js';
 import { AuditLog } from '../models/system.js';
-import { User } from '../models/User.js';
 import { setAccountStatus } from '../services/account.service.js';
 import { adminSchema, createAdmin, deleteAdmin, getAdminUserId, listAdmins } from '../services/admin.service.js';
 import { audit } from '../services/audit.service.js';
-import { issueActivation } from '../services/auth.service.js';
 import { coordinatorSchema, createCoordinator, deleteCoordinator, getCoordinator, listCoordinators, updateCoordinator } from '../services/coordinator.service.js';
 import {
   createEmployee,
@@ -21,15 +19,12 @@ import {
   employeeUpdateSchema,
   getEmployee,
   listEmployees,
-  resendInvitation,
-  revokeInvitation,
   updateEmployee,
 } from '../services/employee.service.js';
 import { getPolicy, policyUpdateSchema, updatePolicy } from '../services/policy.service.js';
 import { adminDashboard, buildReport, dashboardQuerySchema, reportQuerySchema, reportSectionTable } from '../services/report.service.js';
-import { withTransaction } from '../db.js';
 import { toCsv, toXlsx } from '../utils/csv.js';
-import { AppError, notFound } from '../utils/errors.js';
+import { notFound } from '../utils/errors.js';
 import { escapeRegex, paged, paginationSchema } from '../utils/listing.js';
 
 export const adminRouter = Router();
@@ -52,9 +47,7 @@ adminRouter.get('/employees', async (req, res) => {
 });
 
 adminRouter.post('/employees', async (req, res) => {
-  const input = body(employeeInputSchema.extend({ sendInvitation: z.boolean().optional().default(true) }), req);
-  const { sendInvitation, ...data } = input;
-  const employee = await createEmployee(actorFromRequest(req), data, { sendInvitation, source: 'MANUAL' });
+  const employee = await createEmployee(actorFromRequest(req), body(employeeInputSchema, req), { source: 'MANUAL' });
   res.status(201).json(employee);
 });
 
@@ -105,14 +98,6 @@ adminRouter.post('/employees/:id/status', async (req, res) => {
   res.json({ status: user.status });
 });
 
-adminRouter.post('/employees/:id/invitation', async (req, res) => {
-  res.json(await resendInvitation(actorFromRequest(req), objectId(req.params.id, 'Employee')));
-});
-
-adminRouter.delete('/employees/:id/invitation', async (req, res) => {
-  res.json(await revokeInvitation(actorFromRequest(req), objectId(req.params.id, 'Employee')));
-});
-
 // ---------------------------------------------------------------------------
 // Admins
 // ---------------------------------------------------------------------------
@@ -129,9 +114,6 @@ adminRouter.post('/admins/:id/status', async (req, res) => {
 });
 adminRouter.post('/admins/:id/delete', async (req, res) => {
   res.json(await deleteAdmin(actorFromRequest(req), objectId(req.params.id, 'Admin')));
-});
-adminRouter.post('/admins/:id/invitation', async (req, res) => {
-  res.json(await resendForUser(req, await getAdminUserId(objectId(req.params.id, 'Admin'))));
 });
 
 // ---------------------------------------------------------------------------
@@ -159,24 +141,13 @@ adminRouter.post('/coordinators/:id/status', async (req, res) => {
   res.json({ status: (await setAccountStatus(actorFromRequest(req), String(c.user), input.status, input.reason)).status });
 });
 
-// Driver login accounts (admin-only account status / invitation management)
+// Driver login accounts (admin-only account status management)
 adminRouter.post('/drivers/:id/account-status', async (req, res) => {
   const d = await Driver.findById(objectId(req.params.id, 'Driver')).lean();
   if (!d?.user) throw notFound('Driver account');
   const input = body(statusSchema, req);
   res.json({ status: (await setAccountStatus(actorFromRequest(req), String(d.user), input.status, input.reason)).status });
 });
-async function resendForUser(req: Parameters<typeof actorFromRequest>[0], userId: string) {
-  const actor = actorFromRequest(req);
-  return withTransaction(async ({ session }) => {
-    const user = await User.findById(userId).session(session);
-    if (!user) throw notFound('User');
-    if (user.status !== 'INVITED') throw new AppError(409, 'INVALID_STATE', `Invitations can only be sent to INVITED accounts (current: ${user.status})`);
-    const r = await issueActivation(user, actor, session);
-    await audit(actor, 'INVITATION_SENT', 'User', user._id, `Activation invitation (re)sent to ${user.email}`, undefined, session);
-    return r;
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Policies (read is available to all roles via /api/policy)

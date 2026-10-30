@@ -6,7 +6,6 @@ import {
   Alert,
   Button,
   Card,
-  Checkbox,
   ConfirmDialog,
   DataTable,
   EmptyState,
@@ -23,7 +22,6 @@ import {
 import { errorMessage, get, patch, post } from '../../lib/api';
 import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
 import { usePolicy } from '../../lib/policy';
-import { useSsoConfig } from '../../lib/sso';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
 import { AddressPicker, sameSpot, type LatLng, type MapSpot } from '../../components/LocationPicker';
 
@@ -62,8 +60,6 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
   const [spot, setSpot] = useState<MapSpot>({ link: '', pin: null });
   const [initialSpot, setInitialSpot] = useState<MapSpot>({ link: '', pin: null });
   const [mapKey, setMapKey] = useState(0);
-  const [sendInvitation, setSendInvitation] = useState(true);
-  const msOnly = !!useSsoConfig().data?.employeesMicrosoftOnly;
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -73,7 +69,6 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
     if (!open) return;
     setErrors({});
     setError('');
-    setSendInvitation(true);
     const start: FormState =
       employee
         ? {
@@ -136,12 +131,9 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
         id = employee!._id;
         toast.success('Employee updated');
       } else {
-        const created = await post<{ _id: string }>('/admin/employees', { ...form, ...(spot.pin ? { homeLocation: spot.pin, homeMapLink: spot.link.trim() } : {}), sendInvitation });
+        const created = await post<{ _id: string }>('/admin/employees', { ...form, ...(spot.pin ? { homeLocation: spot.pin, homeMapLink: spot.link.trim() } : {}) });
         id = created._id;
-        toast.success(
-          'Employee added',
-          msOnly ? `${form.email} can now sign in with Microsoft` : sendInvitation ? `An activation email has been queued for ${form.email}` : 'No invitation was sent',
-        );
+        toast.success('Employee added', `${form.email} can now sign in with Microsoft`);
       }
       qc.invalidateQueries({ queryKey: ['admin-employees'] });
       qc.invalidateQueries({ queryKey: ['admin-employee'] });
@@ -208,7 +200,7 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
             onChange={set('email')}
             error={errors.email}
             required
-            hint={editing ? 'Changing the email revokes outstanding invitation links' : undefined}
+            hint={editing ? 'They sign in with Microsoft using this email' : undefined}
           />
           <Input label="Phone" type="tel" value={form.phone} onChange={set('phone')} error={errors.phone} />
           <Select label="Office location" value={form.officeLocation} onChange={set('officeLocation')} error={errors.officeLocation} required>
@@ -247,13 +239,6 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
             />
           </div>
         </div>
-        {!editing && !msOnly && (
-          <Checkbox
-            label="Send activation invitation email now"
-            checked={sendInvitation}
-            onChange={(e) => setSendInvitation(e.target.checked)}
-          />
-        )}
         {error && <Alert tone="error">{error}</Alert>}
       </form>
     </Modal>

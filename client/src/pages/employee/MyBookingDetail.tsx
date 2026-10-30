@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, Phone } from 'lucide-react';
+import { KeyRound } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, PageHeader, Plate, Spinner, StatusBadge, cn, useToast } from '../../components/ui';
+import { CallButton, Alert, Button, Card, ConfirmDialog, DescriptionList, ErrorState, PageHeader, Plate, Spinner, StatusBadge, cn, useToast } from '../../components/ui';
 import { ApiError, get, post } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtTravelDate, humanize } from '../../lib/format';
 import { pickupLabel } from '../../lib/policy';
@@ -162,14 +162,7 @@ export default function MyBookingDetail() {
             <DescriptionList
               items={[
                 ['Driver', a.driver?.fullName],
-                [
-                  'Driver phone',
-                  a.driver?.phone ? (
-                    <a href={`tel:${a.driver.phone}`} className="inline-flex items-center gap-1 font-medium text-indigo-700 underline">
-                      <Phone className="h-3.5 w-3.5" aria-hidden /> {a.driver.phone}
-                    </a>
-                  ) : null,
-                ],
+                ['Driver phone', a.driver?.phone ? <CallButton key="call" phone={a.driver.phone} name={a.driver.fullName} /> : null],
                 ['Cab number', a.vehicle?.registrationNumber ? <Plate reg={a.vehicle.registrationNumber} size="lg" /> : null],
                 ['Model', a.vehicle?.model || (a.vehicle?.vehicleType ? humanize(a.vehicle.vehicleType) : null)],
               ]}
@@ -199,13 +192,16 @@ export default function MyBookingDetail() {
                 <p className="text-sm text-slate-600">
                   {b.cabLate ? 'Your cab is running late, so you can cancel this ride yourself.' : 'No cab is assigned yet, so you can cancel this booking yourself.'}
                 </p>
-                <div className="flex flex-wrap gap-2">
+                {/* Phones: the two buttons share the row evenly. */}
+                <div className={cn('flex flex-wrap gap-2', b.canEdit && 'max-sm:grid max-sm:grid-cols-2')}>
                   {b.canEdit && (
-                    <Link to={`/employee/request?edit=${b._id}`}>
-                      <Button variant="secondary">Change ride</Button>
+                    <Link to={`/employee/request?edit=${b._id}`} className="max-sm:contents">
+                      <Button variant="secondary" className="max-sm:w-full">
+                        Change ride
+                      </Button>
                     </Link>
                   )}
-                  <Button variant="danger" onClick={() => setCancelOpen(true)}>
+                  <Button variant="danger" className="max-sm:w-full" onClick={() => setCancelOpen(true)}>
                     Cancel booking
                   </Button>
                 </div>
@@ -223,7 +219,7 @@ export default function MyBookingDetail() {
                 )}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-sm text-slate-600">A cab is already assigned. If your plans have changed, ask the admin to cancel it.</p>
-                  <Button variant="danger" onClick={() => setRequestOpen(true)}>
+                  <Button variant="danger" className="max-sm:w-full" onClick={() => setRequestOpen(true)}>
                     Request cancellation
                   </Button>
                 </div>

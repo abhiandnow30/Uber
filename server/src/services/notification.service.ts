@@ -2,7 +2,6 @@ import type { ClientSession } from 'mongoose';
 import type { TxContext } from '../db.js';
 import { emitToUser } from '../realtime.js';
 import { EmailOutbox, Notification } from '../models/system.js';
-import { encrypt } from '../utils/crypto.js';
 import { getPolicy } from './policy.service.js';
 import type { EmailTemplate } from './email/templates.js';
 
@@ -70,8 +69,6 @@ export type EmailInput = {
   to: string;
   toUserId?: string;
   params: Record<string, unknown>;
-  /** Values like activation links. Encrypted at rest and wiped after sending. */
-  secretParams?: Record<string, string>;
   relatedBookingId?: string;
   /** If set, the email is only queued when this policy preference is enabled. */
   preference?: NotificationPreference;
@@ -97,7 +94,6 @@ export async function enqueueEmail(session: ClientSession | null | undefined, in
         to: input.to.toLowerCase(),
         toUser: input.toUserId,
         params: input.params,
-        secretParams: input.secretParams ? encrypt(JSON.stringify(input.secretParams)) : undefined,
         status: 'PENDING',
         nextAttemptAt: new Date(),
         relatedBooking: input.relatedBookingId,

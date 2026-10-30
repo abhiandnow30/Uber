@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, Car, Pencil, Phone, Plus, Users, X } from 'lucide-react';
+import { CalendarClock, Car, Pencil, Plus, Users, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, EmptyState, ErrorState, PageHeader, Plate, Spinner, cn, useToast } from '../../components/ui';
+import { CallButton, Alert, Button, Card, EmptyState, ErrorState, PageHeader, Plate, Spinner, cn, useToast } from '../../components/ui';
 import { CancelRideDialog, cabIsLate } from './CancelRideDialog';
 import { get, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -119,13 +119,7 @@ function NextRideCard({ b, onCancel }: { b: HomeBooking; onCancel: (b: HomeBooki
             </p>
           </div>
           {a?.driver?.phone && (
-            <a
-              href={`tel:${a.driver.phone}`}
-              className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
-              aria-label={`Call driver ${a.driver.fullName ?? ''}`.trim()}
-            >
-              <Phone className="h-4 w-4" aria-hidden /> Call
-            </a>
+            <CallButton phone={a.driver.phone} name={`driver ${a.driver.fullName ?? ''}`.trim()} size="md" />
           )}
         </div>
       ) : null}

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Card, DataTable, DescriptionList, EmptyState, ErrorState, Input, Modal, PageHeader, Select, Spinner, StatusBadge, Tabs, Textarea, useToast, type Column } from '../../components/ui';
+import { CallButton, Alert, Button, Card, DataTable, DescriptionList, EmptyState, ErrorState, Input, Modal, PageHeader, Select, Spinner, StatusBadge, Tabs, Textarea, useToast, type Column } from '../../components/ui';
 import { errorMessage, get, post } from '../../lib/api';
 import { fieldErrors } from '../../lib/hooks';
 import { useUnsavedChanges } from '../../lib/unsaved';
@@ -167,7 +167,7 @@ export default function VehicleDetail() {
             {v.maintenanceDueAt ? ` · expected back ${fmtDate(v.maintenanceDueAt)}` : ''}
           </Alert>
         )}
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
           <Card title="Vehicle" className="lg:col-span-2">
             <DescriptionList
               items={[
@@ -185,7 +185,7 @@ export default function VehicleDetail() {
                 <Link className="font-medium text-indigo-600 hover:underline" to={`/ops/drivers/${v.currentDriver._id}`}>
                   {v.currentDriver.fullName}
                 </Link>{' '}
-                ({v.currentDriver.driverCode}){v.currentDriver.phone ? ` · ${v.currentDriver.phone}` : ''}
+                ({v.currentDriver.driverCode}) <CallButton phone={v.currentDriver.phone} name={v.currentDriver.fullName} className="ml-1 align-middle" />
               </p>
             ) : (
               <p className="mb-3 text-sm text-slate-500">No driver assigned to this cab.</p>

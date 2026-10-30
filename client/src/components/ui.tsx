@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Info, Inbox, Loader2, Search, X, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Info, Inbox, Loader2, Phone, Search, X, XCircle } from 'lucide-react';
 import {
   createContext,
   useCallback,
@@ -111,7 +111,7 @@ export function Select({ label, error, hint, required, className, children, ...r
   const id = useId();
   return (
     <FieldWrap id={id} label={label} error={error} hint={hint} required={required} className={className}>
-      <select id={id} className={cn(inputBase, 'h-10 pr-8', inputState(error))} aria-invalid={!!error || undefined} required={required} {...rest}>
+      <select id={id} className={cn(inputBase, 'h-10', inputState(error))} aria-invalid={!!error || undefined} required={required} {...rest}>
         {children}
       </select>
     </FieldWrap>
@@ -155,7 +155,7 @@ export function SearchInput({ value, onChange, placeholder = 'Search…', classN
         value={local}
         onChange={(e) => setLocal(e.target.value)}
         placeholder={placeholder}
-        className={cn(inputBase, 'h-10 border-slate-300 pl-9')}
+        className={cn(inputBase, 'h-10 border-slate-300 pl-9 focus:border-indigo-500')}
       />
     </div>
   );
@@ -173,7 +173,7 @@ export function Card({ className, children, title, actions }: { className?: stri
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className="p-4">{children}</div>
+      <div data-card-body className="p-4">{children}</div>
     </section>
   );
 }
@@ -459,8 +459,11 @@ export function Modal({
 
 /**
  * Confirmation for destructive / important actions. With `reasonLabel`, a
- * reason is required and passed to onConfirm.
+ * reason is required and passed to onConfirm. With `reasons`, it is picked from
+ * that list; only "Other" asks for typing.
  */
+const OTHER_REASON = '__other__';
+
 export function ConfirmDialog({
   open,
   onClose,
@@ -471,6 +474,8 @@ export function ConfirmDialog({
   tone = 'danger',
   reasonLabel,
   reasonMinLength = 3,
+  reasons,
+  cancelLabel = 'Cancel',
 }: {
   open: boolean;
   onClose: () => void;
@@ -481,25 +486,38 @@ export function ConfirmDialog({
   tone?: 'danger' | 'primary';
   reasonLabel?: string;
   reasonMinLength?: number;
+  /** Ready-made reasons to choose from (an "Other" choice is added). */
+  reasons?: readonly string[];
+  /** The button that closes without doing anything. */
+  cancelLabel?: string;
 }) {
   const [reason, setReason] = useState('');
+  // With ready-made reasons: the one chosen ('' = none yet, OTHER = typed below).
+  const [choice, setChoice] = useState('');
+  const other = choice === OTHER_REASON;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
     if (open) {
       setReason('');
+      setChoice('');
       setError('');
     }
   }, [open]);
   const submit = async () => {
-    if (reasonLabel && reason.trim().length < reasonMinLength) {
+    if (reasonLabel && reasons && !choice) {
+      setError('Choose a reason');
+      return;
+    }
+    const text = reasons && !other ? choice : reason.trim();
+    if (reasonLabel && text.length < reasonMinLength) {
       setError(`Please enter at least ${reasonMinLength} characters`);
       return;
     }
     setBusy(true);
     setError('');
     try {
-      await onConfirm(reason.trim());
+      await onConfirm(text);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed');
@@ -508,7 +526,7 @@ export function ConfirmDialog({
     }
   };
   // A typed reason isn't thrown away without asking.
-  const guard = useUnsavedChanges(open && reason.trim().length > 0);
+  const guard = useUnsavedChanges(open && (reason.trim().length > 0 || !!choice));
   const close = () => guard(onClose);
   return (
     <Modal
@@ -519,9 +537,9 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="secondary" onClick={close} disabled={busy}>
-            Cancel
+            {cancelLabel}
           </Button>
-          <Button variant={tone} onClick={submit} loading={busy}>
+          <Button variant={tone} onClick={submit} loading={busy} disabled={!!reasonLabel && !!reasons && !choice}>
             {confirmLabel}
           </Button>
         </>
@@ -529,7 +547,20 @@ export function ConfirmDialog({
     >
       <div className="space-y-3 text-sm text-slate-700">
         <div>{message}</div>
-        {reasonLabel && <Textarea label={reasonLabel} value={reason} onChange={(e) => setReason(e.target.value)} required />}
+        {reasonLabel && reasons && (
+          <Select label={reasonLabel} required value={choice} onChange={(e) => setChoice(e.target.value)}>
+            <option value="">Choose a reason…</option>
+            {reasons.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+            <option value={OTHER_REASON}>Other</option>
+          </Select>
+        )}
+        {reasonLabel && (!reasons || other) && (
+          <Textarea label={reasons ? 'What happened?' : reasonLabel} value={reason} onChange={(e) => setReason(e.target.value)} required />
+        )}
         {error && <Alert tone="error">{error}</Alert>}
       </div>
     </Modal>
@@ -585,7 +616,7 @@ export function DataTable<T>({
   return (
     <>
       <CardList columns={columns} rows={rows} rowKey={rowKey} loading={loading} empty={empty} sort={sort} onSort={onSort} onRowClick={onRowClick} />
-      <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block">
+      <div data-table-frame className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className={hideHeader ? 'sr-only' : 'bg-slate-50'}>
             <tr>
@@ -806,6 +837,31 @@ export function useToast() {
 // Number plate
 // ---------------------------------------------------------------------------
 /** "TS09CD5678" → "TS 09 CD 5678", the way plates are read; anything else is shown as written. */
+/**
+ * Calls someone without showing their number: one tap dials it (on a computer the calling app opens).
+ * Nothing is shown when there's no number.
+ */
+export function CallButton({ phone, name, size = 'sm', compact, className }: { phone?: string | null; name?: string | null; size?: 'sm' | 'md'; /** Phones and smaller laptops: just the round phone icon. */ compact?: boolean; className?: string }) {
+  if (!phone) return null;
+  return (
+    <a
+      href={`tel:${phone.replace(/[^\d+]/g, '')}`}
+      aria-label={name ? `Call ${name}` : 'Call'}
+      // Inside clickable rows, calling doesn't also open or tick the row.
+      onClick={(e) => e.stopPropagation()}
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 font-medium text-emerald-700 hover:bg-emerald-100 active:bg-emerald-100',
+        size === 'sm' ? 'h-8 px-3 text-sm' : 'h-10 px-4 text-sm',
+        compact && 'max-xl:w-8 max-xl:justify-center max-xl:px-0',
+        className,
+      )}
+    >
+      <Phone className="h-4 w-4" aria-hidden />
+      <span className={cn(compact && 'max-xl:sr-only')}>Call</span>
+    </a>
+  );
+}
+
 export function formatPlate(reg: string) {
   const m = reg
     .replace(/\s+/g, '')

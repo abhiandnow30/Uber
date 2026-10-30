@@ -42,11 +42,9 @@ export default function DriverLogin() {
           type="password"
           inputMode="numeric"
           autoComplete="current-password"
-          placeholder="4 digits"
           maxLength={4}
           value={password}
           onChange={(e) => setPassword(e.target.value.replace(/\D/g, '').slice(0, 4))}
-          hint="The first 4 digits of your mobile number"
           required
         />
         {error && <Alert tone="error">{error}</Alert>}

@@ -48,7 +48,7 @@ export function createApp() {
       pinoHttp({
         logger,
         autoLogging: { ignore: (req) => req.url?.startsWith('/api/health') ?? false },
-        // Never log query strings (activation/reset tokens travel there).
+        // Never log query strings (sign-in codes and other secrets can travel there).
         serializers: { req: (req) => ({ id: req.id, method: req.method, url: String(req.url).split('?')[0] }) },
       }),
     );
@@ -81,7 +81,7 @@ export function createApp() {
   const api = Router();
   // Every successful change refreshes the open screens it concerns: the people whose rides it
   // touches, that office's transport team, and admins (see noteChange in realtime.ts).
-  // Skipped: sign-in/password requests, marking one's own notifications read, and the one POST
+  // Skipped: sign-in requests, marking one's own notifications read, and the one POST
   // that only looks things up (it would make screens refresh each other in a loop).
   api.use((req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || /^\/(auth|notifications)\//.test(req.path) || req.path === '/ops/trips/eligible') return next();

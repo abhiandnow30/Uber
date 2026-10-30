@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronDown } from 'lucide-react';
 import { DateTime } from 'luxon';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -268,7 +269,7 @@ export default function RequestCab() {
   if (ride && !ride.canEdit) {
     return (
       <>
-        <PageHeader title="Change your ride" subtitle={<Link to={`/employee/bookings/${ride._id}`} className="text-indigo-700 hover:underline">← Back to the ride</Link>} />
+        <PageHeader title="Change your ride" />
         <Alert tone="info" title="This ride can no longer be changed">
           A cab is already assigned. You can cancel it from the ride, or ask the admin.
         </Alert>
@@ -277,17 +278,28 @@ export default function RequestCab() {
   }
   const rules = policy.booking;
   const inFrom = winStart ? addMinutesHHmm(winStart, IN_LEAD_MINUTES) : '';
+  const tips = (
+    <ul className="mt-1 list-inside list-disc space-y-1">
+      {winStart && winEnd && (
+        <>
+          <li>
+            <strong>To the office:</strong> shifts starting {fmt12h(inFrom)} – {fmt12h(winEnd)}; the transport team sets your pickup time.
+          </li>
+          <li>
+            <strong>Home:</strong> shifts ending {fmt12h(winStart)} – {fmt12h(winEnd)}; the cab leaves at the time you choose (your shift end unless you change it).
+          </li>
+        </>
+      )}
+      <li>One cab per shift day, booked at least {minutesLabel(rules.minLeadMinutes)} ahead.</li>
+      {rules.dailyCutoffTime && <li>Bookings for a day close at {fmt12h(rules.dailyCutoffTime)} on the previous day.</li>}
+      <li>Change or cancel it yourself until a cab is assigned.</li>
+      {rules.approvalRequired && <li>Requests need approval before a cab is assigned.</li>}
+    </ul>
+  );
 
   return (
     <>
-      <PageHeader
-        title={ride ? `Change your ride · ${ride.reference}` : 'Request a cab'}
-        subtitle={
-          <Link to={ride ? `/employee/bookings/${ride._id}` : '/employee'} className="text-indigo-700 hover:underline">
-            {ride ? '← Back to the ride' : '← Back to home'}
-          </Link>
-        }
-      />
+      <PageHeader title={ride ? `Change your ride · ${ride.reference}` : 'Request a cab'} />
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <form onSubmit={submit} noValidate className="space-y-4">
@@ -403,35 +415,37 @@ export default function RequestCab() {
                 </Link>
               </Alert>
             )}
-            <div className="flex flex-wrap gap-2 pt-2">
-              <Button type="submit" size="lg" loading={submitting} disabled={submitting || (hasHours && !direction)}>
-                {ride ? 'Save changes' : 'Submit request'}
+            {/* Phones: two equal buttons, Cancel on the left and the main action on the right. */}
+            <div className="flex flex-wrap gap-2 pt-2 max-sm:grid max-sm:grid-cols-2">
+              <Button type="submit" size="lg" className="max-sm:order-last max-sm:w-full" loading={submitting} disabled={submitting || (hasHours && !direction)}>
+                {ride ? 'Save changes' : 'Submit'}
               </Button>
-              <Button variant="ghost" size="lg" onClick={() => navigate(ride ? `/employee/bookings/${ride._id}` : '/employee')} disabled={submitting}>
+              <Button
+                variant="ghost"
+                size="lg"
+                className="max-sm:w-full max-sm:border max-sm:border-slate-300 max-sm:bg-white"
+                onClick={() => navigate(ride ? `/employee/bookings/${ride._id}` : '/employee')}
+                disabled={submitting}
+              >
                 Cancel
               </Button>
             </div>
           </form>
         </Card>
         <div className="space-y-4">
-          <Alert tone="info" title="Good to know">
-            <ul className="mt-1 list-disc space-y-1 pl-4">
-              {winStart && winEnd && (
-                <>
-                  <li>
-                    <strong>To the office:</strong> shifts starting {fmt12h(inFrom)} – {fmt12h(winEnd)}; the transport team sets your pickup time.
-                  </li>
-                  <li>
-                    <strong>Home:</strong> shifts ending {fmt12h(winStart)} – {fmt12h(winEnd)}; the cab leaves at the time you choose (your shift end unless you change it).
-                  </li>
-                </>
-              )}
-              <li>One cab per shift day, booked at least {minutesLabel(rules.minLeadMinutes)} ahead.</li>
-              {rules.dailyCutoffTime && <li>Bookings for a day close at {fmt12h(rules.dailyCutoffTime)} on the previous day.</li>}
-              <li>Change or cancel it yourself until a cab is assigned.</li>
-              {rules.approvalRequired && <li>Requests need approval before a cab is assigned.</li>}
-            </ul>
-          </Alert>
+          {/* Phones: the tips start open and can be folded away. Desktop: the full box. */}
+          <details open className="group rounded-xl border border-sky-200 bg-sky-50 text-sm text-sky-900 lg:hidden">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 font-semibold [&::-webkit-details-marker]:hidden">
+              Good to know
+              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden />
+            </summary>
+            <div className="border-t border-sky-200 px-4 py-3">{tips}</div>
+          </details>
+          <div className="max-lg:hidden">
+            <Alert tone="info" title="Good to know">
+              {tips}
+            </Alert>
+          </div>
         </div>
       </div>
     </>

@@ -168,10 +168,8 @@ export function MapLinkField({
           onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
           placeholder="Paste the link, e.g. https://maps.app.goo.gl/…"
           inputMode="url"
-          className={cn(
-            'h-11 w-full rounded-lg border bg-white px-3 pr-9 text-sm focus:outline-none focus:ring-2',
-            linkError ? 'border-red-400 focus:ring-red-100' : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-100',
-          )}
+          aria-invalid={!!linkError || undefined}
+          className={cn('h-11 w-full rounded-lg border bg-white px-3 pr-9 text-sm shadow-xs', linkError ? 'border-red-400 focus:border-red-500' : 'border-slate-300 focus:border-indigo-500')}
         />
         {reading && <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-slate-400" aria-label="Reading the link" />}
       </div>

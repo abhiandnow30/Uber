@@ -1,6 +1,5 @@
 import { logger } from '../../logger.js';
 import { EmailOutbox } from '../../models/system.js';
-import { decrypt } from '../../utils/crypto.js';
 import { metrics } from '../../metrics.js';
 import { EmailSendError, getEmailProvider } from './providers.js';
 import { renderEmail, type EmailTemplate } from './templates.js';
@@ -32,13 +31,12 @@ export async function processOutboxBatch(limit = 20): Promise<number> {
       },
       { $set: { status: 'SENDING', lockedUntil: new Date(now.getTime() + LEASE_MS) }, $inc: { attempts: 1 } },
       { sort: { nextAttemptAt: 1 }, new: true },
-    ).select('+secretParams');
+    );
     if (!job) break;
 
     const provider = getEmailProvider();
     try {
-      const secret = job.secretParams ? (JSON.parse(decrypt(job.secretParams)) as Record<string, string>) : {};
-      const rendered = renderEmail(job.template as EmailTemplate, job.params ?? {}, secret);
+      const rendered = renderEmail(job.template as EmailTemplate, job.params ?? {});
       const result = await provider.send({
         to: job.to,
         subject: rendered.subject,
@@ -57,7 +55,7 @@ export async function processOutboxBatch(limit = 20): Promise<number> {
             providerMessageId: result.providerMessageId,
             lastError: null,
           },
-          $unset: { secretParams: 1, lockedUntil: 1 },
+          $unset: { lockedUntil: 1 },
         },
       );
       metrics.inc('emails_accepted_total');

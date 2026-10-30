@@ -76,13 +76,13 @@ export default function AdminDashboard() {
               aria-label="Date"
               value={date || data?.date || ''}
               onChange={(e) => setDate(e.target.value)}
-              className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm shadow-xs focus:border-indigo-500"
+              className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm shadow-xs focus:border-indigo-500"
             />
             <select
               aria-label="Office"
               value={office}
               onChange={(e) => setOffice(e.target.value)}
-              className="h-9 rounded-lg border border-slate-300 bg-white px-2 pr-8 text-sm shadow-xs focus:border-indigo-500"
+              className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm shadow-xs focus:border-indigo-500"
             >
               <option value="">All offices</option>
               {policy.data?.officeLocations.map((o) => (

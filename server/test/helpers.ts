@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { AuthenticationResult } from '@azure/msal-node';
 import { DateTime } from 'luxon';
 import request from 'supertest';
 import type TestAgent from 'supertest/lib/agent.js';
@@ -12,10 +13,11 @@ import { Vehicle } from '../src/models/Vehicle.js';
 import { EmailSendError, type EmailProvider, type OutgoingEmail } from '../src/services/email/providers.js';
 import { processOutboxBatch } from '../src/services/email/outbox.worker.js';
 import { EmailOutbox } from '../src/models/system.js';
-import { hashPassword } from '../src/utils/crypto.js';
-import { employeesUseMicrosoftOnly } from '../src/services/auth.service.js';
+import { normalizeEmail } from '../src/services/auth.service.js';
+import { createSession, CSRF_COOKIE, SESSION_COOKIE } from '../src/services/session.service.js';
+import { buildLoginUrl, completeLogin, setSsoClient } from '../src/services/sso.service.js';
+import { config } from '../src/config.js';
 
-export const PASSWORD = 'Password123!';
 export const app = createApp();
 
 // ---------------------------------------------------------------------------
@@ -57,12 +59,6 @@ export async function makeRetriesDue() {
   await EmailOutbox.updateMany({ status: 'RETRYING' }, { $set: { nextAttemptAt: new Date(Date.now() - 1000) } });
 }
 
-export function linkFrom(email: OutgoingEmail, path: string) {
-  const m = email.text.match(new RegExp(`https?://[^\\s]+${path}\\?token=([A-Za-z0-9_\\-%]+)`));
-  if (!m) throw new Error(`No ${path} link in email: ${email.subject}`);
-  return decodeURIComponent(m[1]);
-}
-
 // ---------------------------------------------------------------------------
 // HTTP client with session cookie + CSRF headers
 // ---------------------------------------------------------------------------
@@ -93,11 +89,45 @@ export function anonymous(): Client {
   return wrap(request.agent(app), '');
 }
 
-export async function login(email: string, password = PASSWORD): Promise<Client> {
+/**
+ * Signs an admin or employee in the way "Sign in with Microsoft" ends: a real server session with
+ * the same cookies the app sets (the Entra round trip itself can't run in tests).
+ */
+export async function login(email: string): Promise<Client> {
+  const user = await User.findOne({ email: normalizeEmail(email) });
+  if (!user || user.status !== 'ACTIVE') throw new Error(`Login failed for ${email}: ${user ? `account is ${user.status}` : 'no such user'}`);
+  // Like a real Microsoft sign-in: link the Microsoft account (first time) and record the sign-in.
+  await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date(), ...(user.entraOid ? {} : { entraOid: `test-oid-${user._id}` }) } });
+  const session = await createSession(user, { method: 'SSO' });
   const agent = request.agent(app);
-  const res = await agent.post('/api/auth/login').set('X-Requested-With', 'XMLHttpRequest').send({ email, password });
-  if (res.status !== 200) throw new Error(`Login failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
-  return wrap(agent, res.body.csrfToken);
+  agent.jar.setCookie(`${SESSION_COOKIE}=${session.token}; Path=/`);
+  agent.jar.setCookie(`${CSRF_COOKIE}=${session.csrfToken}; Path=/`);
+  return wrap(agent, session.csrfToken);
+}
+
+/**
+ * The real "Sign in with Microsoft" completion (sso.service) with a fake Entra client: activates an
+ * INVITED account on first sign-in, exactly as in production. Throws if the sign-in is refused.
+ */
+export async function microsoftSignIn(email: string, oid = `oid-${email}`): Promise<Client> {
+  const saved = { ...config };
+  Object.assign(config, { ssoEnabled: true, ENTRA_TENANT_ID: 'tenant-test', ENTRA_CLIENT_ID: 'app-test', ENTRA_CLIENT_SECRET: 's', ENTRA_REDIRECT_URI: 'http://localhost/api/auth/sso/callback' });
+  setSsoClient({
+    getAuthCodeUrl: async () => 'https://login.microsoftonline.com/tenant-test/oauth2/v2.0/authorize',
+    acquireTokenByCode: async () => ({ idTokenClaims: { oid, tid: 'tenant-test', preferred_username: email } }) as unknown as AuthenticationResult,
+  });
+  try {
+    const { cookieValue } = await buildLoginUrl();
+    const r = await completeLogin({ code: 'auth-code', state: JSON.parse(cookieValue).state, cookie: cookieValue });
+    if (!r.ok) throw new Error(`Microsoft sign-in refused for ${email}: ${r.reason}`);
+    const agent = request.agent(app);
+    agent.jar.setCookie(`${SESSION_COOKIE}=${r.token}; Path=/`);
+    agent.jar.setCookie(`${CSRF_COOKIE}=${r.csrfToken}; Path=/`);
+    return wrap(agent, r.csrfToken);
+  } finally {
+    setSsoClient(null);
+    Object.assign(config, saved);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +142,6 @@ export async function makeUser(role: string, email: string, opts: { status?: str
     name: opts.name ?? email.split('@')[0],
     role,
     status: opts.status ?? 'ACTIVE',
-    passwordHash: await hashPassword(PASSWORD),
   });
 }
 
@@ -148,8 +177,8 @@ export async function makeEmployee(opts: { office?: string; email?: string; empl
     phone: '+91 90000 00000',
     officeLocation: opts.office ?? 'HYD',
   });
-  // With Microsoft-only sign-in employees can't use passwords, so there's no client to hand back.
-  const canLogin = (!opts.status || opts.status === 'ACTIVE') && !employeesUseMicrosoftOnly();
+  // Only active accounts can sign in.
+  const canLogin = !opts.status || opts.status === 'ACTIVE';
   return { user, employee, client: canLogin ? await login(email) : null };
 }
 

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import {
+import { CallButton,
   Alert,
   Button,
   Card,
@@ -282,12 +282,12 @@ export default function DriverDetail() {
       />
 
       <div className="space-y-4">
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
           <Card title="Profile" className="lg:col-span-2">
             <DescriptionList
               items={[
                 ['Driver ID', d.driverCode],
-                ['Phone', d.phone],
+                ['Phone', <CallButton key="call" phone={d.phone} name={d.fullName} />],
                 ['Office', d.officeLocation],
                 ['License number', d.licenseNumber],
                 ['License expiry', <ExpiryText key="l" iso={d.licenseExpiry} />],
@@ -302,7 +302,7 @@ export default function DriverDetail() {
           <div className="space-y-4">
             <Card title="Sign-in">
               <p className="mb-3 text-sm text-slate-600">
-                Signs in with mobile number <strong>{d.phone}</strong>; the password is its first 4 digits.
+                Signs in with their mobile number; the password is its first 4 digits.
               </p>
               {!d.user ? (
                 <p className="text-sm text-slate-500">Hasn&apos;t signed in yet. You can already assign rides; the driver sees them after signing in.</p>

@@ -73,15 +73,11 @@ describe('email outbox', () => {
     expect(new Set(fakeEmail.sent.map((e) => e.to)).size).toBe(10);
   });
 
-  it('secrets are encrypted at rest and wiped after sending; templates escape HTML', async () => {
-    await enqueueEmail(null, { idempotencyKey: 'inv', template: 'ACCOUNT_INVITATION', to: 'n@test.com', params: { name: '<b>x</b>' }, secretParams: { activationUrl: 'http://x/activate?token=SECRET123' } });
-    const raw = await EmailOutbox.findOne({ idempotencyKey: 'inv' }).select('+secretParams').lean();
-    expect(raw!.secretParams).not.toContain('SECRET123');
+  it('templates escape HTML', async () => {
+    await enqueueEmail(null, { idempotencyKey: 'esc', template: 'TRIP_COMPLETED', to: 'n@test.com', params: { name: '<b>x</b>', reference: 'CAB-1' } });
     await drainOutbox();
-    expect(fakeEmail.sent[0].html).toContain('SECRET123');
     expect(fakeEmail.sent[0].html).toContain('&lt;b&gt;x&lt;/b&gt;');
-    const after = await EmailOutbox.findOne({ idempotencyKey: 'inv' }).select('+secretParams').lean();
-    expect(after!.secretParams).toBeUndefined();
+    expect(fakeEmail.sent[0].html).not.toContain('<b>x</b>');
     expect(renderEmail('CAB_ASSIGNED', { travelDate: '2026-10-16' }).subject).toBe('Your Cab Has Been Assigned — 2026-10-16');
   });
 });

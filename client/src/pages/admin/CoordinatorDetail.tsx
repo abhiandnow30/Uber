@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Pencil } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import {
+import { CallButton,
   Alert,
   Button,
   Card,
@@ -148,7 +148,7 @@ export default function CoordinatorDetail() {
       variant: 'success',
       title: 'Activate coordinator',
       tone: 'primary',
-      message: <p>{data.fullName} will be able to sign in again. If the account was never activated, use “Re-invite”.</p>,
+      message: <p>{data.fullName} will be able to sign in again with their email and mobile number.</p>,
       run: () => setStatus.mutateAsync({ status: 'ACTIVE' }),
     },
     deactivate: {
@@ -236,7 +236,7 @@ export default function CoordinatorDetail() {
             items={[
               ['Full name', data.fullName],
               ['Email', data.email],
-              ['Phone', data.phone || '—'],
+              ['Phone', data.phone ? <CallButton key="call" phone={data.phone} name={data.fullName} /> : '—'],
               ['Created', fmtDateTime(data.createdAt)],
               ['Offices', data.officeLocations.join(', ') || '—'],
             ]}

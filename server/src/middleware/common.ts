@@ -80,7 +80,7 @@ const skipInTests = () => config.isTest && process.env.ENABLE_RATE_LIMIT_IN_TEST
 // NOTE: the in-memory store is per-process. Use a shared store (e.g. Redis) when
 // running multiple API instances.
 // Offices often share one NAT IP, so successful sign-ins are not counted (only
-// failures); per-account lockout in auth.service handles credential guessing.
+// failures); driver and coordinator sign-in also lock out after repeated failures.
 export const authLimiter = rateLimit({ ...limiterDefaults, windowMs: 15 * 60_000, limit: 30, skipSuccessfulRequests: true, skip: skipInTests });
 export const publicFormLimiter = rateLimit({ ...limiterDefaults, windowMs: 60 * 60_000, limit: 10, skip: skipInTests });
 // Keyed per signed-in user (falls back to IP), so a shared office IP is not one bucket.

@@ -28,8 +28,45 @@
   button:not(:disabled),
   [role='button']:not(:disabled),
   [role='radio']:not(:disabled) { cursor: pointer; }
+  /* Buttons, links, checkboxes: a ring just outside, when reached with the keyboard. */
   :focus-visible { @apply outline-hidden ring-2 ring-indigo-500 ring-offset-2; }
+  /* Fields you type in or pick from: the same soft glow around the field everywhere, by mouse,
+     tap or keyboard (with the blue border set on the field); red for a field with an error. */
+  :is(input:not([type='checkbox'], [type='radio'], [type='range'], [type='file']), select, textarea):focus {
+    @apply outline-hidden ring-4 ring-indigo-500/15 ring-offset-0;
+  }
+  :is(input, select, textarea)[aria-invalid='true']:focus { @apply ring-red-500/15; }
 }
+
+/*
+ * A table inside a card fills it edge to edge on laptops and desktops: the card's own border frames
+ * it, without a second box and padding inside. Anything else in that card (page numbers, notes)
+ * keeps its spacing. Phones show tables as stacked cards, which keep the card's padding.
+ */
+@media (min-width: 64rem) {
+  [data-card-body]:has(> [data-table-frame]) { padding: 0; }
+  [data-card-body] > [data-table-frame] { border: 0; border-radius: 0; }
+  /* The first and last columns line up with the card's title. */
+  [data-card-body] > [data-table-frame] :is(th, td):first-child { padding-left: 1rem; }
+  [data-card-body] > [data-table-frame] :is(th, td):last-child { padding-right: 1rem; }
+  [data-card-body]:has(> [data-table-frame]) > :not([data-table-frame]) { margin: 0.75rem 1rem; }
+  section:has(> [data-card-body] > [data-table-frame]) { overflow: hidden; }
+}
+
+/*
+ * Every dropdown: the same chevron, set evenly inside the box (not the browser's own arrow pushed
+ * against the edge), with room so the text never runs under it.
+ */
+select:not([multiple]) {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1rem 1rem;
+  padding-right: 2.5rem;
+  text-overflow: ellipsis;
+}
+select:not([multiple]):disabled { opacity: 0.7; }
 
 /* A text cursor that blinks on and off, for the PIN boxes. */
 @keyframes caret-blink {

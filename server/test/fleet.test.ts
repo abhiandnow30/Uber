@@ -4,7 +4,7 @@ import { DriverVehicleLink } from '../src/models/fleetHistory.js';
 import { Notification } from '../src/models/system.js';
 import { User } from '../src/models/User.js';
 import { Vehicle } from '../src/models/Vehicle.js';
-import { anonymous, assign, makeAdmin, makeCoordinator, makeDriver, PASSWORD, scenario } from './helpers.js';
+import { anonymous, assign, makeAdmin, makeCoordinator, makeDriver, scenario } from './helpers.js';
 
 const nextYear = () => new Date(Date.now() + 365 * 86400_000).toISOString();
 
@@ -131,12 +131,11 @@ describe('driver sign-in with mobile number and vehicle number', () => {
     expect((await signIn('9876543210', '9876')).status).toBe(401);
   });
 
-  it('drivers cannot sign in with email and password, even if they once had one', async () => {
+  it('drivers cannot sign in with email and password (there is no such sign-in)', async () => {
     await setup();
     const drv = await makeDriver();
-    const res = await anonymous().post('/api/auth/login', { email: drv.user.email, password: PASSWORD });
-    expect(res.status).toBe(401);
-    expect(res.body.error.message).toContain('mobile number');
+    const res = await anonymous().post('/api/auth/login', { email: drv.user.email, password: 'Password123!' });
+    expect(res.status).toBe(404);
   });
 
   it('two active drivers cannot be registered with the same mobile number', async () => {

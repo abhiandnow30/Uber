@@ -3,24 +3,22 @@ import { canTransitionAccount, OPEN_STATUSES, type AccountStatus } from '../doma
 import { CabAssignment, CabRequest } from '../models/booking.js';
 import { Driver } from '../models/Driver.js';
 import { Employee } from '../models/Employee.js';
-import { AuthToken } from '../models/system.js';
 import { User } from '../models/User.js';
 import { AppError, badRequest, notFound } from '../utils/errors.js';
 import { audit, type Actor } from './audit.service.js';
-import { adminsUseMicrosoft, employeesUseMicrosoftOnly, issueActivation } from './auth.service.js';
 import { refreshDriverAvailability } from './availability.service.js';
 import { alertOperations } from './alert.service.js';
 import { revokeAllSessions } from './session.service.js';
 
 /**
- * The only path through which an account status changes (other than activation).
+ * The only path through which an account status changes (other than activation by first sign-in).
  * Enforces the backend state machine and the operational side effects.
  */
 export async function setAccountStatus(actor: Actor, userId: string, to: AccountStatus, reason?: string) {
   if (actor.id === userId && to !== 'ACTIVE') throw badRequest('You cannot deactivate or suspend your own account');
   const result = await withTransaction(async (tx) => {
     const { session } = tx;
-    const user = await User.findById(userId).select('+passwordHash').session(session);
+    const user = await User.findById(userId).session(session);
     if (!user) throw notFound('User');
     const from = user.status as AccountStatus;
     if (from === to) return { user, from, changed: false };
@@ -28,10 +26,7 @@ export async function setAccountStatus(actor: Actor, userId: string, to: Account
       throw new AppError(409, 'INVALID_TRANSITION', `Cannot change account status from ${from} to ${to}`);
     }
     if (from === 'INVITED' && to === 'ACTIVE') {
-      throw new AppError(409, 'INVALID_TRANSITION', 'Invited accounts become active only when the user completes activation');
-    }
-    if (to === 'ACTIVE' && from === 'INACTIVE' && user.role !== 'DRIVER' && user.role !== 'COORDINATOR' && !user.passwordHash && !user.entraOid) {
-      throw new AppError(409, 'INVALID_TRANSITION', 'This account was never activated. Re-send an invitation instead.');
+      throw new AppError(409, 'INVALID_TRANSITION', 'Invited accounts become active when the user first signs in');
     }
     if ((to === 'INACTIVE' || to === 'SUSPENDED') && !reason?.trim()) throw badRequest('A reason is required');
     if (user.role === 'ADMIN' && from === 'ACTIVE' && to !== 'ACTIVE') {
@@ -47,12 +42,7 @@ export async function setAccountStatus(actor: Actor, userId: string, to: Account
     );
     if (!updated) throw new AppError(409, 'CONCURRENT_UPDATE', 'Account was modified concurrently, please retry');
 
-    const signsInWithMicrosoft = (updated.role === 'EMPLOYEE' && employeesUseMicrosoftOnly()) || (updated.role === 'ADMIN' && adminsUseMicrosoft());
-    if (to === 'INVITED' && updated.role !== 'DRIVER' && updated.role !== 'COORDINATOR' && !signsInWithMicrosoft) {
-      await issueActivation(updated, actor, session);
-    }
     if (to === 'INACTIVE' || to === 'SUSPENDED') {
-      await AuthToken.updateMany({ user: user._id, usedAt: null, revokedAt: null }, { $set: { revokedAt: new Date() } }, { session });
       await handleDeactivationSideEffects(tx, updated, to, reason ?? '');
     }
     if (user.role === 'DRIVER') {

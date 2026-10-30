@@ -15,31 +15,13 @@ const sessionSchema = new Schema(
     revokeReason: { type: String },
     ip: { type: String },
     userAgent: { type: String },
-    authMethod: { type: String, enum: ['PASSWORD', 'SSO', 'PHONE'], default: 'PASSWORD' },
+    authMethod: { type: String, enum: ['SSO', 'PHONE'] },
   },
   { timestamps: true },
 );
 // Clean up long-expired sessions automatically.
 sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
 export const Session = mongoose.model('Session', sessionSchema);
-
-// ---------------------------------------------------------------------------
-// Single-use tokens: account activation and password reset.
-// ---------------------------------------------------------------------------
-const authTokenSchema = new Schema(
-  {
-    user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    purpose: { type: String, enum: ['ACTIVATION', 'PASSWORD_RESET'], required: true },
-    tokenHash: { type: String, required: true, unique: true },
-    expiresAt: { type: Date, required: true },
-    usedAt: { type: Date },
-    revokedAt: { type: Date },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  },
-  { timestamps: true },
-);
-authTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
-export const AuthToken = mongoose.model('AuthToken', authTokenSchema);
 
 // ---------------------------------------------------------------------------
 // In-app notifications (persisted; pushed over websockets when online).
@@ -74,7 +56,6 @@ const emailOutboxSchema = new Schema(
     to: { type: String, required: true, lowercase: true },
     toUser: { type: Schema.Types.ObjectId, ref: 'User' },
     params: { type: Schema.Types.Mixed, default: {} }, // non-secret render params
-    secretParams: { type: String, select: false }, // AES-GCM encrypted JSON; wiped after send
     subject: { type: String },
     status: { type: String, enum: EMAIL_STATUSES, default: 'PENDING', index: true },
     attempts: { type: Number, default: 0 },

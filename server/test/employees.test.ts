@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { CabRequest } from '../src/models/booking.js';
-import { AuditLog, AuthToken, Notification } from '../src/models/system.js';
+import { AuditLog, Notification } from '../src/models/system.js';
 import { User } from '../src/models/User.js';
 import { Employee } from '../src/models/Employee.js';
-import { anonymous, bookingInput, drainOutbox, fakeEmail, linkFrom, login, makeAdmin, makeCoordinator, makeEmployee } from './helpers.js';
+import { anonymous, bookingInput, drainOutbox, fakeEmail, makeAdmin, makeCoordinator, makeEmployee } from './helpers.js';
 
 const newEmployee = (o: Record<string, unknown> = {}) => ({
   employeeId: 'EMP2001',
@@ -15,7 +15,7 @@ const newEmployee = (o: Record<string, unknown> = {}) => ({
 });
 
 describe('employee management', () => {
-  it('admin adds an employee manually: INVITED status, normalized email, invitation email, audit', async () => {
+  it('admin adds an employee manually: INVITED status, normalized email, no email (they sign in with Microsoft), audit', async () => {
     const admin = await makeAdmin();
     const res = await admin.client.post('/api/admin/employees', newEmployee());
     expect(res.status).toBe(201);
@@ -23,9 +23,7 @@ describe('employee management', () => {
     expect(user!.status).toBe('INVITED');
     expect(user!.email).toBe('kiran.patel@test.com');
     await drainOutbox();
-    const mail = fakeEmail.to('kiran.patel@test.com');
-    expect(mail).toHaveLength(1);
-    expect(mail[0].subject).toMatch(/Activate/);
+    expect(fakeEmail.to('kiran.patel@test.com')).toHaveLength(0);
     expect(await AuditLog.exists({ action: 'EMPLOYEE_CREATED' })).toBeTruthy();
   });
 
@@ -52,50 +50,16 @@ describe('employee management', () => {
     expect(res2.status).toBe(400);
   });
 
-  it('activation token works once, then the employee can log in; reuse is rejected', async () => {
-    const admin = await makeAdmin();
-    await admin.client.post('/api/admin/employees', newEmployee()).expect(201);
-    await drainOutbox();
-    const token = linkFrom(fakeEmail.to('kiran.patel@test.com')[0], '/activate');
-    const inspect = await anonymous().get(`/api/auth/activation/inspect?token=${encodeURIComponent(token)}`);
-    expect(inspect.body.valid).toBe(true);
-    await anonymous().post('/api/auth/activate', { token, password: 'short' }).expect(400);
-    await anonymous().post('/api/auth/activate', { token, password: 'StrongPass123' }).expect(200);
-    const reuse = await anonymous().post('/api/auth/activate', { token, password: 'StrongPass123' });
-    expect(reuse.status).toBe(400);
-    expect(reuse.body.error.code).toBe('INVALID_TOKEN');
-    const c = await login('kiran.patel@test.com', 'StrongPass123');
-    await c.get('/api/auth/me').expect(200);
-  });
-
-  it('expired activation tokens are rejected', async () => {
-    const admin = await makeAdmin();
-    await admin.client.post('/api/admin/employees', newEmployee()).expect(201);
-    await drainOutbox();
-    const token = linkFrom(fakeEmail.to('kiran.patel@test.com')[0], '/activate');
-    await AuthToken.updateMany({}, { $set: { expiresAt: new Date(Date.now() - 1000) } });
-    const res = await anonymous().post('/api/auth/activate', { token, password: 'StrongPass123' });
-    expect(res.status).toBe(400);
-  });
-
-  it('resending an invitation revokes the previous link', async () => {
+  it('there are no invitation links to resend or revoke', async () => {
     const admin = await makeAdmin();
     const created = await admin.client.post('/api/admin/employees', newEmployee()).expect(201);
-    await drainOutbox();
-    const first = linkFrom(fakeEmail.to('kiran.patel@test.com')[0], '/activate');
-    await admin.client.post(`/api/admin/employees/${created.body._id}/invitation`).expect(200);
-    await drainOutbox();
-    const second = linkFrom(fakeEmail.to('kiran.patel@test.com')[1], '/activate');
-    expect(second).not.toBe(first);
-    await anonymous().post('/api/auth/activate', { token: first, password: 'StrongPass123' }).expect(400);
-    await anonymous().post('/api/auth/activate', { token: second, password: 'StrongPass123' }).expect(200);
+    expect((await admin.client.post(`/api/admin/employees/${created.body._id}/invitation`)).status).toBe(404);
+    expect((await admin.client.del(`/api/admin/employees/${created.body._id}/invitation`)).status).toBe(404);
   });
 
   it('unapproved / not-yet-activated users cannot book cabs', async () => {
     const admin = await makeAdmin();
     await admin.client.post('/api/admin/employees', newEmployee()).expect(201);
-    const res = await anonymous().post('/api/auth/login', { email: 'kiran.patel@test.com', password: 'anything123' });
-    expect(res.status).toBe(401); // no password yet → cannot authenticate at all
     await anonymous().post('/api/me/bookings', bookingInput()).expect(401);
   });
 
@@ -117,7 +81,7 @@ describe('employee management', () => {
     const admin = await makeAdmin();
     const created = await admin.client.post('/api/admin/employees', newEmployee()).expect(201);
     const res = await admin.client.post(`/api/admin/employees/${created.body._id}/status`, { status: 'ACTIVE' });
-    expect(res.status).toBe(409); // INVITED → ACTIVE only via activation
+    expect(res.status).toBe(409); // INVITED → ACTIVE only via first Microsoft sign-in
     const res2 = await admin.client.post(`/api/admin/employees/${created.body._id}/status`, { status: 'SUSPENDED', reason: 'x test' });
     expect(res2.status).toBe(409);
   });

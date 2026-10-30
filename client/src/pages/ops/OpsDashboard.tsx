@@ -236,7 +236,8 @@ export default function OpsDashboard() {
             <StatCard label="Completed" value={b?.completed ?? 0} tone="good" hint={b?.cancelledOrRejected ? `${b.cancelledOrRejected} cancelled` : undefined} onClick={() => navigate(`/ops/history${qs({ status: 'COMPLETED' })}`)} />
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-3">
+          {/* Phones only: a long name or address ends in "…" instead of widening the cards past the screen. */}
+          <div className="grid gap-6 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
             {/* 3. Next rides that still need a cab */}
             <Card
               title="Next rides waiting for a cab"

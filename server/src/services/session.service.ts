@@ -8,7 +8,7 @@ export const CSRF_COOKIE = 'cab_csrf';
 
 export async function createSession(
   user: { _id: unknown },
-  meta: { ip?: string; userAgent?: string; method?: 'PASSWORD' | 'SSO' | 'PHONE' },
+  meta: { ip?: string; userAgent?: string; method: 'SSO' | 'PHONE' },
 ) {
   const token = randomToken(32);
   const csrfToken = randomToken(24);
@@ -22,7 +22,7 @@ export async function createSession(
     lastSeenAt: now,
     ip: meta.ip,
     userAgent: meta.userAgent?.slice(0, 300),
-    authMethod: meta.method ?? 'PASSWORD',
+    authMethod: meta.method,
   });
   return { token, csrfToken, expiresAt };
 }
@@ -62,11 +62,4 @@ export async function revokeAllSessions(userId: unknown, reason: string) {
   await Session.updateMany({ user: userId, revokedAt: null }, { $set: { revokedAt: new Date(), revokeReason: reason } });
   const { disconnectUserSockets } = await import('../realtime.js');
   await disconnectUserSockets(String(userId));
-}
-
-/** Signs the user out everywhere except this session (e.g. after they change their password). */
-export async function revokeOtherSessions(userId: unknown, keepSessionId: string, reason: string) {
-  await Session.updateMany({ user: userId, revokedAt: null, _id: { $ne: keepSessionId } }, { $set: { revokedAt: new Date(), revokeReason: reason } });
-  const { disconnectUserSockets } = await import('../realtime.js');
-  await disconnectUserSockets(String(userId), keepSessionId);
 }

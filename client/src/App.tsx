@@ -8,9 +8,6 @@ const p = <T,>(f: () => Promise<{ default: T }>) => lazy(f as never);
 
 // Public
 const Login = p(() => import('./pages/public/Login'));
-const Activate = p(() => import('./pages/public/Activate'));
-const ForgotPassword = p(() => import('./pages/public/ForgotPassword'));
-const ResetPassword = p(() => import('./pages/public/ResetPassword'));
 const Register = p(() => import('./pages/public/Register'));
 const DriverLogin = p(() => import('./pages/public/DriverLogin'));
 const CoordinatorLogin = p(() => import('./pages/public/CoordinatorLogin'));
@@ -81,9 +78,6 @@ export default function App() {
         <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
         <Route path="/driver-login" element={<PublicOnly><DriverLogin /></PublicOnly>} />
         <Route path="/coordinator-login" element={<PublicOnly><CoordinatorLogin /></PublicOnly>} />
-        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-        <Route path="/activate" element={<Activate />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
 
         <Route element={<RequireRole><AppLayout /></RequireRole>}>
           <Route path="/notifications" element={<Notifications />} />

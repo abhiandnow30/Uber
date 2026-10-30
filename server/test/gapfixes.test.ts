@@ -7,25 +7,24 @@ import { User } from '../src/models/User.js';
 import { Vehicle } from '../src/models/Vehicle.js';
 import { createAdmin } from '../src/scripts/create-admin.js';
 import { checkDocumentExpiry } from '../src/services/monitor.service.js';
-import { anonymous, assign, bookingInput, drainOutbox, employeePin, fakeEmail, linkFrom, login, makeCoordinator, makeEmployee, scenario, toArrived } from './helpers.js';
+import { anonymous, assign, bookingInput, drainOutbox, employeePin, fakeEmail, makeCoordinator, makeEmployee, microsoftSignIn, scenario, toArrived } from './helpers.js';
 
 describe('create-admin bootstrap', () => {
-  it('creates an INVITED admin with an activation email, and can complete activation', async () => {
+  it('creates an INVITED admin (no email) who activates on their first Microsoft sign-in', async () => {
     const r = await createAdmin('IT.Admin@Company.com', 'IT Admin');
     expect(r.created).toBe(true);
-    const u = await User.findOne({ email: 'it.admin@company.com' }).select('+passwordHash');
+    const u = await User.findOne({ email: 'it.admin@company.com' });
     expect(u!.role).toBe('ADMIN');
     expect(u!.status).toBe('INVITED');
-    expect(u!.passwordHash).toBeFalsy();
     expect(await AuditLog.exists({ action: 'ADMIN_BOOTSTRAPPED' })).toBeTruthy();
     await drainOutbox();
-    const token = linkFrom(fakeEmail.to('it.admin@company.com')[0], '/activate');
-    await anonymous().post('/api/auth/activate', { token, password: 'AdminPass2026' }).expect(200);
-    const admin = await login('it.admin@company.com', 'AdminPass2026');
+    expect(fakeEmail.to('it.admin@company.com')).toHaveLength(0);
+    const admin = await microsoftSignIn('it.admin@company.com');
     await admin.get('/api/admin/dashboard').expect(200);
+    expect((await User.findOne({ email: 'it.admin@company.com' }))!.status).toBe('ACTIVE');
   });
 
-  it('re-issues the invitation for an invited admin but never alters other accounts', async () => {
+  it('leaves an already invited admin as is and never alters other accounts', async () => {
     await createAdmin('a@company.com', 'Admin A');
     expect((await createAdmin('a@company.com', 'Admin A')).created).toBe(false);
     await makeEmployee({ email: 'emp@company.com' });

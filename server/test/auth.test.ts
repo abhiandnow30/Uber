@@ -1,8 +1,8 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { AuditLog, Session } from '../src/models/system.js';
+import { Session } from '../src/models/system.js';
 import { User } from '../src/models/User.js';
-import { anonymous, app, drainOutbox, fakeEmail, linkFrom, login, makeAdmin, makeCoordinator, makeDriver, makeEmployee, makeUser, PASSWORD } from './helpers.js';
+import { anonymous, app, makeAdmin, makeCoordinator, makeDriver, makeEmployee, makeUser } from './helpers.js';
 
 describe('authentication', () => {
   it('logs in, returns profile and logs out (session revoked server-side)', async () => {
@@ -17,33 +17,17 @@ describe('authentication', () => {
     await client!.get('/api/auth/me').expect(401);
   });
 
-  it('uses one generic message for unknown emails and wrong passwords (no enumeration)', async () => {
-    await makeUser('EMPLOYEE', 'known@test.com');
+  it('has no email + password sign-in, activation or password reset endpoints', async () => {
+    await makeUser('ADMIN', 'pw.admin@test.com');
     const anon = anonymous();
-    const a = await anon.post('/api/auth/login', { email: 'nobody@test.com', password: 'whatever123' });
-    const b = await anon.post('/api/auth/login', { email: 'known@test.com', password: 'wrong-password1' });
-    expect(a.status).toBe(401);
-    expect(b.status).toBe(401);
-    expect(a.body.error.message).toBe(b.body.error.message);
-    expect(a.body.error.message).toMatch(/contact your administrator/i);
-  });
-
-  it('locks the account after repeated failed attempts', async () => {
-    await makeUser('EMPLOYEE', 'lock@test.com');
-    const anon = anonymous();
-    for (let i = 0; i < 5; i++) await anon.post('/api/auth/login', { email: 'lock@test.com', password: 'bad-password-1' });
-    const res = await anon.post('/api/auth/login', { email: 'lock@test.com', password: PASSWORD });
-    expect(res.status).toBe(429);
-    expect(res.body.error.code).toBe('ACCOUNT_LOCKED');
-    expect(await AuditLog.exists({ action: 'LOGIN_LOCKOUT' })).toBeTruthy();
-  });
-
-  it('rejects INVITED / SUSPENDED / INACTIVE accounts even with the right password', async () => {
-    for (const status of ['INVITED', 'SUSPENDED', 'INACTIVE']) {
-      await makeUser('EMPLOYEE', `${status.toLowerCase()}@test.com`, { status });
-      const res = await anonymous().post('/api/auth/login', { email: `${status.toLowerCase()}@test.com`, password: PASSWORD });
-      expect(res.status).toBe(403);
-    }
+    expect((await anon.post('/api/auth/login', { email: 'pw.admin@test.com', password: 'Password123!' })).status).toBe(404);
+    expect((await anon.post('/api/auth/password/forgot', { email: 'pw.admin@test.com' })).status).toBe(404);
+    expect((await anon.post('/api/auth/password/reset', { token: 'x'.repeat(20), password: 'Password123!' })).status).toBe(404);
+    expect((await anon.post('/api/auth/activate', { token: 'x'.repeat(20), password: 'Password123!' })).status).toBe(404);
+    expect((await anon.get('/api/auth/activation/inspect?token=abc')).status).toBe(404);
+    const { client } = await makeEmployee();
+    expect((await client!.post('/api/auth/password/change', { currentPassword: 'a', newPassword: 'b' })).status).toBe(404);
+    expect(await Session.countDocuments({ user: (await User.findOne({ email: 'pw.admin@test.com' }))!._id })).toBe(0);
   });
 
   it('requires CSRF headers on state-changing requests', async () => {
@@ -56,22 +40,6 @@ describe('authentication', () => {
     expect(bad.status).toBe(403);
     expect(bad.body.error.code).toBe('CSRF_REJECTED');
     await client!.post('/api/notifications/read-all').expect(200);
-  });
-
-  it('password reset link is single-use and revokes existing sessions', async () => {
-    const { client } = await makeEmployee({ email: 'reset@test.com' });
-    await anonymous().post('/api/auth/password/forgot', { email: 'reset@test.com' }).expect(200);
-    // same response for unknown email
-    const unknown = await anonymous().post('/api/auth/password/forgot', { email: 'ghost@test.com' });
-    expect(unknown.status).toBe(200);
-    await drainOutbox();
-    const mail = fakeEmail.to('reset@test.com')[0];
-    const token = linkFrom(mail, '/reset-password');
-    await anonymous().post('/api/auth/password/reset', { token, password: 'NewPassword456' }).expect(200);
-    const again = await anonymous().post('/api/auth/password/reset', { token, password: 'AnotherPass789' });
-    expect(again.status).toBe(400);
-    await client!.get('/api/auth/me').expect(401); // old session revoked
-    await login('reset@test.com', 'NewPassword456');
   });
 
   it('suspending a user revokes their sessions immediately', async () => {

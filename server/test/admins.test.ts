@@ -3,16 +3,16 @@ import { AuditLog, Session } from '../src/models/system.js';
 import { User } from '../src/models/User.js';
 import { CabAssignment } from '../src/models/booking.js';
 import { Coordinator } from '../src/models/Coordinator.js';
-import { anonymous, assign, drainOutbox, fakeEmail, makeAdmin, makeCoordinator, makeUser, PASSWORD, scenario } from './helpers.js';
+import { anonymous, assign, drainOutbox, fakeEmail, makeAdmin, makeCoordinator, makeUser, scenario } from './helpers.js';
 
 describe('admin management', () => {
-  it('admins see every admin with counts, can search, and add a new admin who is invited by email', async () => {
+  it('admins see every admin with counts, can search, and add a new admin who signs in with Microsoft (no email is sent)', async () => {
     const { client } = await makeAdmin('first.admin@test.com');
     await makeUser('ADMIN', 'second.admin@test.com', { name: 'Second Admin' });
 
     let list = await client.get('/api/admin/admins').expect(200);
     expect(list.body.summary).toMatchObject({ total: 2, active: 2 });
-    expect(list.body.items[0]).not.toHaveProperty('passwordHash');
+    expect(list.body.items[0]).not.toHaveProperty('entraOid');
 
     // phone is required, and must look like a phone number
     expect((await client.post('/api/admin/admins', { fullName: 'New Admin', email: 'new.admin@test.com', phone: '' })).status).toBe(422);
@@ -22,7 +22,7 @@ describe('admin management', () => {
     expect(created.status).toBe(201);
     expect(await User.findOne({ email: 'new.admin@test.com' }).lean()).toMatchObject({ role: 'ADMIN', status: 'INVITED', phone: '+91 90000 30003' });
     await drainOutbox();
-    expect(fakeEmail.to('new.admin@test.com')).toHaveLength(1);
+    expect(fakeEmail.to('new.admin@test.com')).toHaveLength(0);
     expect(await AuditLog.exists({ action: 'ADMIN_CREATED' })).toBeTruthy();
     expect((await client.post('/api/admin/admins', { fullName: 'Dup', email: 'new.admin@test.com', phone: '9000030004' })).status).toBe(409);
 
@@ -74,12 +74,10 @@ describe('admin management', () => {
     expect((await User.findById(only.user._id))!.status).toBe('ACTIVE');
   });
 
-  it('invited admins can be sent a new invitation; non-admins cannot manage admins', async () => {
+  it('there are no admin invitations to resend; non-admins cannot manage admins', async () => {
     const { client } = await makeAdmin();
     const created = await client.post('/api/admin/admins', { fullName: 'Invitee', email: 'invitee@test.com', phone: '9000030005' }).expect(201);
-    await client.post(`/api/admin/admins/${created.body._id}/invitation`).expect(200);
-    await drainOutbox();
-    expect(fakeEmail.to('invitee@test.com')).toHaveLength(2);
+    expect((await client.post(`/api/admin/admins/${created.body._id}/invitation`)).status).toBe(404);
 
     const coord = await makeCoordinator(['HYD']);
     expect((await coord.client.get('/api/admin/admins')).status).toBe(403);
@@ -165,8 +163,8 @@ describe('coordinator sign-in with email and mobile number', () => {
     for (let i = 0; i < 4; i++) await anonymous().post('/api/auth/coordinator-login', { email: 'lock.me@gmail.com', phone: '9000000000' });
     expect((await anonymous().post('/api/auth/coordinator-login', { email: 'lock.me@gmail.com', phone: coord.phone })).status).toBe(429);
 
-    const pw = await anonymous().post('/api/auth/login', { email: 'lock.me@gmail.com', password: PASSWORD });
-    expect(pw.status).toBe(401);
+    const pw = await anonymous().post('/api/auth/login', { email: 'lock.me@gmail.com', password: 'Password123!' });
+    expect(pw.status).toBe(404);
   });
 
   it('a deleted coordinator can no longer sign in', async () => {

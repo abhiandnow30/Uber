@@ -84,6 +84,13 @@ export async function syncIndexes() {
   // Finished rides are no longer late, and failed-email alerts aren't shown to anyone any more.
   await bookings.updateMany({ isDelayed: true, status: { $in: ['COMPLETED', 'CANCELLED', 'REJECTED', 'NO_SHOW'] } }, { $set: { isDelayed: false } });
   await mongoose.connection.db!.collection('notifications').deleteMany({ type: 'EMAIL_FAILED' });
+  // Email + password sign-in is gone: drop stored password data, activation/reset links and their unsent emails.
+  await mongoose.connection.db!.collection('users').updateMany(
+    { $or: [{ passwordHash: { $exists: true } }, { failedLoginCount: { $exists: true } }, { lockedUntil: { $exists: true } }, { passwordChangedAt: { $exists: true } }] },
+    { $unset: { passwordHash: '', passwordChangedAt: '', failedLoginCount: '', lockedUntil: '' } },
+  );
+  await mongoose.connection.db!.collection('authtokens').deleteMany({});
+  await mongoose.connection.db!.collection('emailoutboxes').deleteMany({ template: { $in: ['ACCOUNT_INVITATION', 'PASSWORD_RESET'] }, status: { $in: ['PENDING', 'RETRYING', 'FAILED'] } });
 
   // Drivers saved before mobile sign-in existed have no phoneKey yet.
   const drivers = mongoose.model('Driver');

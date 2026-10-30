@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCheck } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Card, EmptyState, ErrorState, PageHeader, Pagination, Spinner, cn } from '../../components/ui';
+import { Button, EmptyState, ErrorState, PageHeader, Pagination, Spinner, cn } from '../../components/ui';
 import { get, post, qs } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fmtRelative } from '../../lib/format';
@@ -51,7 +51,7 @@ export default function Notifications() {
           </Button>
         }
       />
-      <Card>
+      <div>
         {isLoading ? (
           <Spinner />
         ) : error ? (
@@ -66,7 +66,7 @@ export default function Notifications() {
                   onClick={() => open(n)}
                   className={cn(
                     'flex w-full gap-3 rounded-lg px-3 py-3 text-left',
-                    n.readAt ? 'hover:bg-slate-50' : 'border-l-4 border-indigo-500 bg-indigo-50 hover:bg-indigo-100',
+                    n.readAt ? 'border border-slate-200 bg-white hover:bg-slate-50' : 'border-l-4 border-indigo-500 bg-indigo-50 hover:bg-indigo-100',
                   )}
                 >
                   <span className="min-w-0 flex-1">
@@ -83,7 +83,7 @@ export default function Notifications() {
           </ul>
         )}
         {data && <Pagination page={page} total={data.total} totalPages={Math.max(1, Math.ceil(data.total / data.pageSize))} onPage={setPage} />}
-      </Card>
+      </div>
     </>
   );
 }

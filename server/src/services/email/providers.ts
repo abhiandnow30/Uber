@@ -26,7 +26,7 @@ export interface EmailProvider {
 
 /**
  * Development provider: writes each email as an HTML file under server/.dev-mailbox
- * so activation links etc. can be opened locally. Never used in production.
+ * so links in emails can be opened locally. Never used in production.
  */
 export class MockEmailProvider implements EmailProvider {
   readonly name = 'mock';

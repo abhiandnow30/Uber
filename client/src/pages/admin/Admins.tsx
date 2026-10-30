@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
-import {
+import { CallButton,
   Alert,
   Button,
   ConfirmDialog,
@@ -20,7 +20,6 @@ import { errorMessage, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { fmtDateTime } from '../../lib/format';
 import { fieldErrors, useListState, usePaged } from '../../lib/hooks';
-import { useSsoConfig } from '../../lib/sso';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
 import { PHONE_RE } from './Coordinators';
 
@@ -36,11 +35,11 @@ type AdminRow = {
   hasCredentials: boolean;
 };
 
-type Action = { kind: 'suspend' | 'deactivate' | 'reactivate' | 'resend' | 'delete'; admin: AdminRow };
+type Action = { kind: 'suspend' | 'deactivate' | 'reactivate' | 'delete'; admin: AdminRow };
 
 const BLANK_ADMIN = { fullName: '', email: '', phone: '' };
 
-function AddAdminModal({ open, onClose, microsoft }: { open: boolean; onClose: () => void; microsoft: boolean }) {
+function AddAdminModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [form, setForm] = useState(BLANK_ADMIN);
@@ -68,7 +67,7 @@ function AddAdminModal({ open, onClose, microsoft }: { open: boolean; onClose: (
     setBusy(true);
     try {
       await post('/admin/admins', form);
-      toast.success('Admin added', microsoft ? `${form.email} can now sign in with Microsoft` : `An activation email has been queued for ${form.email}`);
+      toast.success('Admin added', `${form.email} can now sign in with Microsoft`);
       qc.invalidateQueries({ queryKey: ['admin-admins'] });
       onClose();
       return true;
@@ -101,7 +100,7 @@ function AddAdminModal({ open, onClose, microsoft }: { open: boolean; onClose: (
             Cancel
           </Button>
           <Button type="submit" form="admin-form" loading={busy}>
-            {microsoft ? 'Add admin' : 'Add & invite'}
+            Add admin
           </Button>
         </>
       }
@@ -111,9 +110,7 @@ function AddAdminModal({ open, onClose, microsoft }: { open: boolean; onClose: (
         <Input label="Official work email" type="email" value={form.email} onChange={set('email')} error={errors.email} required />
         <Input label="Phone number" type="tel" value={form.phone} onChange={set('phone')} error={errors.phone} required />
         <Alert tone="info">
-          {microsoft
-            ? 'Use their official work email: they sign in with “Sign in with Microsoft” and their account becomes active on their first sign-in. '
-            : 'The new admin starts as “Invited” and receives an email to set their password. '}
+          Use their official work email: they sign in with “Sign in with Microsoft” and their account becomes active on their first sign-in.{' '}
           Admins have full access to every office and setting, including adding and removing other admins.
         </Alert>
         {error && !Object.keys(errors).length && <Alert tone="error">{error}</Alert>}
@@ -131,7 +128,6 @@ export default function Admins() {
   const summary = (data as unknown as { summary?: { total: number; active: number; invited: number } } | undefined)?.summary;
   const [adding, setAdding] = useState(false);
   const [action, setAction] = useState<Action | null>(null);
-  const microsoft = !!useSsoConfig().data?.adminsMicrosoft;
 
   const onlyActive = (a: AdminRow) => a.status === 'ACTIVE' && summary?.active === 1;
   const actionsFor = (a: AdminRow): Action['kind'][] => {
@@ -144,7 +140,7 @@ export default function Admins() {
       case 'INACTIVE':
         return ['reactivate', 'delete'];
       case 'INVITED':
-        return microsoft ? ['deactivate', 'delete'] : ['resend', 'deactivate', 'delete'];
+        return ['deactivate', 'delete'];
       default:
         return [];
     }
@@ -153,23 +149,19 @@ export default function Admins() {
   const run = async (reason: string) => {
     if (!action) return;
     const { kind, admin } = action;
-    if (kind === 'resend') {
-      await post(`/admin/admins/${admin._id}/invitation`);
-      toast.success('Invitation email queued', admin.email);
-    } else if (kind === 'delete') {
+    if (kind === 'delete') {
       await post(`/admin/admins/${admin._id}/delete`);
       toast.success(`${admin.name} has been deleted`);
     } else {
-      // Inactive admins who never set a password are re-invited instead of reactivated directly.
+      // Inactive admins who never signed in go back to "Invited": active again on their first Microsoft sign-in.
       const status = kind === 'suspend' ? 'SUSPENDED' : kind === 'deactivate' ? 'INACTIVE' : admin.status === 'INACTIVE' && !admin.hasCredentials ? 'INVITED' : 'ACTIVE';
-      // (with Microsoft sign-in, "INVITED" simply means "active again on their next Microsoft sign-in")
       await post(`/admin/admins/${admin._id}/status`, { status, reason: reason || undefined });
       toast.success(`${admin.name} is now ${status === 'INVITED' ? 'invited again' : status.toLowerCase()}`);
     }
     qc.invalidateQueries({ queryKey: ['admin-admins'] });
   };
 
-  const LABELS: Record<Action['kind'], string> = { suspend: 'Suspend', deactivate: 'Deactivate', reactivate: 'Reactivate', resend: 'Resend invite', delete: 'Delete' };
+  const LABELS: Record<Action['kind'], string> = { suspend: 'Suspend', deactivate: 'Deactivate', reactivate: 'Reactivate', delete: 'Delete' };
 
   const columns: Column<AdminRow>[] = [
     {
@@ -185,7 +177,7 @@ export default function Admins() {
         </div>
       ),
     },
-    { key: 'phone', header: 'Phone', render: (a) => a.phone || '—' },
+    { key: 'phone', header: 'Phone', render: (a) => (a.phone ? <CallButton phone={a.phone} name={a.name} /> : '—') },
     {
       key: 'status',
       header: 'Status',
@@ -198,7 +190,7 @@ export default function Admins() {
     {
       key: 'login',
       header: 'Last sign-in',
-      render: (a) => <span className="whitespace-nowrap">{a.lastLoginAt ? fmtDateTime(a.lastLoginAt) : a.status === 'INVITED' && microsoft ? 'Not yet (Microsoft)' : 'Never'}</span>,
+      render: (a) => <span className="whitespace-nowrap">{a.lastLoginAt ? fmtDateTime(a.lastLoginAt) : a.status === 'INVITED' ? 'Not yet (Microsoft)' : 'Never'}</span>,
     },
     {
       key: 'actions',
@@ -206,7 +198,7 @@ export default function Admins() {
       render: (a) => (
         <div className="flex flex-wrap justify-end gap-1">
           {actionsFor(a).map((kind) => (
-            <Button key={kind} size="sm" variant={kind === 'reactivate' || kind === 'resend' ? 'secondary' : 'ghost'} onClick={() => setAction({ kind, admin: a })}>
+            <Button key={kind} size="sm" variant={kind === 'reactivate' ? 'secondary' : 'ghost'} onClick={() => setAction({ kind, admin: a })}>
               {LABELS[kind]}
             </Button>
           ))}
@@ -220,8 +212,7 @@ export default function Admins() {
   const messages: Record<Action['kind'], string> = {
     suspend: 'They are signed out everywhere and cannot sign in until reactivated.',
     deactivate: 'They are signed out everywhere and their access is removed. You can reactivate them later.',
-    reactivate: microsoft ? 'They can sign in with Microsoft again.' : 'They can sign in again. If they never set a password, a new invitation email is sent instead.',
-    resend: 'A new activation link is emailed. Earlier links stop working.',
+    reactivate: 'They can sign in with Microsoft again.',
     delete: 'Their admin account is permanently removed and they are signed out everywhere. This cannot be undone.',
   };
 
@@ -249,7 +240,7 @@ export default function Admins() {
         empty={<EmptyState title={list.q ? 'No admins match' : 'No admins'} />}
       />
       {data && <Pagination page={data.page} totalPages={data.totalPages} total={data.total} onPage={list.setPage} />}
-      <AddAdminModal open={adding} onClose={() => setAdding(false)} microsoft={microsoft} />
+      <AddAdminModal open={adding} onClose={() => setAdding(false)} />
       <ConfirmDialog
         open={!!action}
         onClose={() => setAction(null)}

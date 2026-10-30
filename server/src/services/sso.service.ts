@@ -3,7 +3,6 @@ import { ConfidentialClientApplication, CryptoProvider } from '@azure/msal-node'
 import { z } from 'zod';
 import { config } from '../config.js';
 import { withTransaction } from '../db.js';
-import { AuthToken } from '../models/system.js';
 import { User } from '../models/User.js';
 import { AppError, conflict } from '../utils/errors.js';
 import { audit } from './audit.service.js';
@@ -124,7 +123,6 @@ export async function completeLogin(params: { code: string; state: string; cooki
     // first SSO sign-in completes activation.
     await withTransaction(async ({ session }) => {
       await User.updateOne({ _id: user!._id, status: 'INVITED' }, { $set: { status: 'ACTIVE', activatedAt: new Date(), statusChangedAt: new Date(), entraOid: claims.oid } }, { session });
-      await AuthToken.updateMany({ user: user!._id, purpose: 'ACTIVATION', usedAt: null, revokedAt: null }, { $set: { revokedAt: new Date() } }, { session });
       await audit({ id: String(user!._id), role: user!.role, email: user!.email, ip: params.ip }, 'ACCOUNT_ACTIVATED', 'User', user!._id, 'Account activated via Microsoft SSO', undefined, session);
     });
     user = await User.findById(user._id);
@@ -169,7 +167,7 @@ export async function completeRegistration(ticket: Ticket, input: z.infer<typeof
   if (await User.exists({ entraOid: ticket.oid })) throw conflict('This Microsoft account is already registered. Sign in instead.', 'ALREADY_REGISTERED');
   const actor = { id: '', role: 'EMPLOYEE' as const, email: ticket.email, ip: meta.ip, userAgent: meta.userAgent };
   const userId = await withTransaction(async (tx) => {
-    const employee = await createEmployee(actor, { ...input, route: '', email: ticket.email }, { sendInvitation: false, source: 'SSO' }, tx);
+    const employee = await createEmployee(actor, { ...input, route: '', email: ticket.email }, { source: 'SSO' }, tx);
     const now = new Date();
     await User.updateOne(
       { _id: employee.user },
