@@ -24,7 +24,8 @@ import { assertBookingInScope, assertInScope, bookingScope, bookingScopeFilter }
 
 export const createBookingSchema = z.object({
   travelDate: z.string().regex(DATE_RE, 'Use YYYY-MM-DD'),
-  // Ignored when the shift has hours (the cab time then follows from the shift times).
+  // When the cab leaves the office (OUT, rides home): the employee may work late or leave early, so
+  // it is theirs to choose (the shift end when left out). Ignored for IN: the transport team sets it.
   pickupTime: z.string().regex(TIME_RE, 'Use HH:mm (24h)').optional(),
   // The employee's shift times for this day, when they differ from the usual ones (e.g. 10 PM - 7 AM
   // instead of 9 PM - 6 AM). They decide whether the cab is IN or OUT; see cabForShift.
@@ -241,14 +242,15 @@ async function planRide(employee: { officeLocation?: string | null; homeAddress?
       pickupTimeSet = false;
       travelDate = shiftDate;
     } else {
-      // The cab leaves the office when the shift ends (the next day when it ends after midnight).
-      pickupTime = shiftEnd;
-      travelDate = shiftEnd < shiftStart ? DateTime.fromISO(shiftDate).plus({ days: 1 }).toFormat('yyyy-MM-dd') : shiftDate;
+      // The cab leaves the office at the time the employee chose, by default when the shift ends. It
+      // lands on the shift's own night: 11 PM stays that evening, 1 AM is the morning after.
+      pickupTime = input.pickupTime ?? shiftEnd;
+      travelDate = shiftCabDate(shiftStart, shiftEnd, shiftDate, pickupTime);
     }
   } else if (shift?.startTime && shift.defaultPickupTime) {
-    // Shift with a cab time but no end (older setups): the shift's own cab time.
+    // Shift with a cab time but no end (older setups): the employee's time, by default the shift's own.
     shiftDate = input.travelDate;
-    pickupTime = shift.defaultPickupTime;
+    pickupTime = input.pickupTime ?? shift.defaultPickupTime;
     travelDate = shiftCabDate(shift.startTime, shift.defaultPickupTime, shiftDate, pickupTime);
   }
   if (!pickupTime) throw validationError('Choose a pickup time', { fields: { pickupTime: 'Choose a pickup time' } });
@@ -574,7 +576,7 @@ export async function decideCancellationRequest(actor: Actor, id: string, decisi
 // ---------------------------------------------------------------------------
 // Cancellation (shared by employee / coordinator / admin)
 // ---------------------------------------------------------------------------
-export async function cancelBookingInternal(actor: Actor, bookingId: unknown, reason: string, allowedFrom: BookingStatus[], extraSet: Record<string, unknown> = {}) {
+export async function cancelBookingInternal(actor: Actor, bookingId: unknown, reason: string, allowedFrom: BookingStatus[], extraSet: Record<string, unknown> = {}, onlyAssignment?: unknown) {
   if (!reason?.trim()) throw badRequest('A cancellation reason is required');
   return withTransaction(async (tx) => {
     const current = await CabRequest.findById(bookingId).session(tx.session);
@@ -584,6 +586,7 @@ export async function cancelBookingInternal(actor: Actor, bookingId: unknown, re
       actor,
       event: wasInProgress ? 'TRIP_INTERRUPTED' : 'CANCELLED',
       reason,
+      current: onlyAssignment,
       // An automatic cancellation (system) has no user.
       set: { cancelledBy: actor.id || undefined, cancelledByRole: actor.role === 'SYSTEM' ? undefined : actor.role, cancellationReason: reason, cancelledAt: new Date(), ...extraSet },
       unset: ['openSlotKey', 'shiftDayKey'],
@@ -757,8 +760,13 @@ export async function getBookingForOperations(actor: Actor, id: string) {
     TripStatusHistory.find({ booking: booking._id }).sort({ createdAt: 1 }).populate('actor', 'name').lean(),
     booking.currentAssignment ? RideStartCredential.findOne({ assignment: booking.currentAssignment }).sort({ createdAt: -1 }).select('status attempts maxAttempts expiresAt usedAt').lean() : null,
   ]);
+  // Once the driver has started the trip (for anyone sharing the cab), its cab can't be changed.
+  const live = assignments.find((a) => String(a._id) === String(booking.currentAssignment));
+  const tripStarted =
+    !!live &&
+    !!(await CabAssignment.exists({ ...(live.tripId ? { tripId: live.tripId } : { _id: live._id }), enRouteAt: { $ne: null }, status: { $nin: ['REASSIGNED', 'DECLINED'] } }));
   // Coordinators never see the PIN itself, only its state. Email delivery isn't shown to anyone.
-  return { ...booking, assignments, history, pinState };
+  return { ...booking, assignments, history, pinState, tripStarted };
 }
 
 export async function approveBooking(actor: Actor, id: string) {

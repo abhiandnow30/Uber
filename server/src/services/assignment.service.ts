@@ -26,6 +26,10 @@ export const assignSchema = z.object({
   driverId: z.string().refine(mongoose.isValidObjectId, 'Invalid driver'),
   vehicleId: z.string().refine(mongoose.isValidObjectId, 'Invalid vehicle'),
   reason: z.string().trim().max(300).optional(),
+  // IN rides (home → office): when the cab picks them up. Required while their pickup isn't set.
+  pickupTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm (24h)').optional(),
+  // Put the ride into a shared cab already going at that time (its cab, driver and pickup time are used).
+  joinTripId: z.string().uuid('Invalid trip').optional(),
 });
 
 type Window = { start: Date; end: Date };
@@ -261,7 +265,89 @@ async function notifyAssignment(
   tx.afterCommit(() => emitToOperations(booking.officeLocation, 'assignment:created', { bookingId: String(booking._id), assignmentId: String(assignment._id) }));
 }
 
-/** Assign an eligible driver + vehicle to an unassigned booking. Idempotent by requestKey. */
+type TripChoice = { id: string; name: string; joined: boolean; driverId?: string; vehicleId?: string; pickupTime?: string };
+
+/**
+ * The trip a ride goes into on the chosen cab. One cab, one trip: when the cab already has a shared
+ * trip at that time (same way, date and time, nobody picked up yet, a seat left) the ride joins it,
+ * even when it is assigned on its own; otherwise it starts a trip of its own. `joinTripId` asks for
+ * that trip explicitly (its cab and driver are used); a trip that no longer fits is then an error.
+ */
+async function tripFor(tx: TxContext, booking: CabRequestDoc, driverId: string, vehicleId: string, joinTripId?: string): Promise<TripChoice> {
+  const { session } = tx;
+  let tripId = joinTripId;
+  if (!tripId) {
+    const w = await windowFor(booking);
+    const busy = await CabAssignment.find({ vehicle: vehicleId, status: 'ACTIVE', booking: { $ne: booking._id }, windowStart: { $lt: w.end }, windowEnd: { $gt: w.start } })
+      .session(session)
+      .lean();
+    const ids = new Set(busy.map((a) => a.tripId ?? ''));
+    // Busy then with exactly one trip by the same driver: a candidate to join. Anything else is a clash reserve() reports.
+    if (busy.length && ids.size === 1 && !ids.has('') && busy.every((a) => String(a.driver) === driverId)) tripId = [...ids][0];
+  }
+  if (tripId) {
+    const members = (await CabAssignment.find({ tripId, status: 'ACTIVE', booking: { $ne: booking._id } })
+      .populate('booking', 'passengers direction pickupTime employee travelDate shiftDate reportBy')
+      .session(session)
+      .lean()) as unknown as Array<TripMember & { vehicle: unknown }>;
+    const cab = members.length ? await Vehicle.findById(members[0].vehicle).session(session).lean() : null;
+    const seatsUsed = members.reduce((n, m) => n + (m.booking?.passengers ?? 1), 0);
+    const problem = !members.length || !cab
+      ? 'That cab’s trip has changed. Refresh and choose again.'
+      : members.some((m) => m.startedAt)
+        ? 'That cab has already picked up its riders. Choose another cab.'
+        : members.some((m) => slotOf(m.booking) !== slotOf(booking))
+          ? 'That cab is going at a different time or the other way. Choose another cab.'
+          : seatsUsed + booking.passengers > cab.capacity
+            ? `${cab.registrationNumber} has no seat left (${seatsUsed} of ${cab.capacity} taken).`
+            : '';
+    if (!problem) {
+      const current = members[0].tripName ?? 'Shared cab';
+      const memberRoutes = await routesOf(members.map((m) => ({ employee: m.booking?.employee })));
+      // Keep a name the coordinator chose; an automatic one grows to cover the new rider's route.
+      const name = isDefaultTripName(current, memberRoutes) ? defaultTripName([...memberRoutes, ...(await routesOf([booking]))]) : current;
+      if (name !== current) await CabAssignment.updateMany({ tripId, status: 'ACTIVE' }, { $set: { tripName: name } }, { session });
+      return {
+        id: tripId,
+        name,
+        joined: true,
+        driverId: String(members[0].driver),
+        vehicleId: String(members[0].vehicle),
+        pickupTime: booking.direction === 'IN' ? members[0].booking?.pickupTime : undefined,
+      };
+    }
+    if (joinTripId) throw new AppError(409, 'TRIP_CHANGED', problem);
+  }
+  return { id: crypto.randomUUID(), name: defaultTripName(await routesOf([booking])), joined: false };
+}
+
+/** A rider left a shared cab: its automatic name ("Kondapur & Madhapur Cab") follows the riders still in it. */
+async function renameAfterLeaving(tx: TxContext, tripId: string, leaver: { employee: unknown }) {
+  const members = await CabAssignment.find({ tripId, status: 'ACTIVE' }).populate('booking', 'employee').session(tx.session).lean();
+  if (!members.length) return;
+  const routes = await routesOf(members.map((m) => ({ employee: (m.booking as { employee?: unknown } | null)?.employee })));
+  const current = members[0].tripName ?? '';
+  if (!isDefaultTripName(current, [...routes, ...(await routesOf([leaver]))])) return;
+  const name = defaultTripName(routes);
+  if (name !== current) await CabAssignment.updateMany({ tripId, status: 'ACTIVE' }, { $set: { tripName: name } }, { session: tx.session });
+}
+
+/** Has the driver started this ride's trip (tapped "Start the trip" for anyone in it)? Its cab can't change then. */
+async function tripStarted(tx: TxContext, assignment: { _id: unknown; tripId?: string | null }) {
+  return !!(await CabAssignment.exists({
+    ...(assignment.tripId ? { tripId: assignment.tripId } : { _id: assignment._id }),
+    enRouteAt: { $ne: null },
+    status: { $nin: ['REASSIGNED', 'DECLINED'] },
+  }).session(tx.session));
+}
+
+const startedMessage = (reference: string) =>
+  `The driver has already started the trip for ${reference}, so its cab can't be changed now. If the cab has a problem, the driver reports it and the ride comes back to you to assign again.`;
+
+/**
+ * Assign an eligible driver + vehicle to an unassigned booking. Idempotent by requestKey. On a cab
+ * already going at that time, the ride joins its shared trip.
+ */
 export async function assignBooking(actor: Actor, bookingId: string, input: z.infer<typeof assignSchema>, requestKey?: string) {
   if (requestKey) {
     const existing = await CabAssignment.findOne({ requestKey }).lean();
@@ -280,18 +366,29 @@ export async function assignBooking(actor: Actor, bookingId: string, input: z.in
       if (!ASSIGNABLE_STATUSES.includes(booking.status as BookingStatus)) {
         throw new AppError(409, 'INVALID_TRANSITION', `Booking ${booking.reference} is ${booking.status} and cannot be assigned`);
       }
-      const { assignment, driver, vehicle } = await reserve(tx, actor, booking, input.driverId, input.vehicleId, requestKey);
+      const trip = await tripFor(tx, booking, input.driverId, input.vehicleId, input.joinTripId);
+      // IN rides: the coordinator's pickup time (or the shared cab's) before reserving, as the cab's hours follow it.
+      await setInPickupTimes([booking], trip.pickupTime ?? input.pickupTime);
+      const { assignment, driver, vehicle } = await reserve(tx, actor, booking, trip.driverId ?? input.driverId, trip.vehicleId ?? input.vehicleId, requestKey, { id: trip.id, name: trip.name });
       const updated = await transitionBooking(tx, booking._id, [booking.status as BookingStatus], 'ASSIGNED', {
         actor,
         event: 'ASSIGNED',
         assignmentId: assignment._id,
         set: { currentAssignment: assignment._id, isDelayed: false },
         unset: ['delayReason'],
-        meta: { driver: driver.driverCode, vehicle: vehicle.registrationNumber },
+        meta: { driver: driver.driverCode, vehicle: vehicle.registrationNumber, ...(trip.joined ? { trip: trip.name } : {}) },
       });
       const hadPrevious = await CabAssignment.exists({ booking: booking._id, _id: { $ne: assignment._id } }).session(tx.session);
       await notifyAssignment(tx, updated, assignment, driver, vehicle, !!hadPrevious);
-      await audit(actor, 'RIDE_ASSIGNED', 'CabAssignment', assignment._id, `${booking.reference} assigned to ${driver.driverCode} / ${vehicle.registrationNumber}`, { bookingId, driverId: input.driverId, vehicleId: input.vehicleId }, tx.session);
+      await audit(
+        actor,
+        trip.joined ? 'TRIP_JOINED' : 'RIDE_ASSIGNED',
+        'CabAssignment',
+        assignment._id,
+        `${booking.reference} assigned to ${driver.driverCode} / ${vehicle.registrationNumber}${trip.joined ? ` (shared cab ${trip.name})` : ''}`,
+        { bookingId, driverId: String(driver._id), vehicleId: String(vehicle._id), tripId: trip.id },
+        tx.session,
+      );
       return { assignment, duplicate: false };
     });
     return result;
@@ -308,8 +405,10 @@ export async function assignBooking(actor: Actor, bookingId: string, input: z.in
 }
 
 /**
- * Replace the driver/vehicle of an assigned booking: the old assignment is closed as
- * REASSIGNED, its PIN revoked, and a new assignment + new PIN are created atomically.
+ * Change the cab of an assigned ride, only before the driver starts its trip: the old assignment is
+ * closed as REASSIGNED, its PIN revoked, and a new assignment + new PIN are created atomically. The
+ * ride can go into another cab's shared trip at that time (e.g. A and B share a cab, then A moves
+ * to C's cab: A + C share one cab and B rides alone), or into a free cab on its own.
  */
 export async function reassignBooking(actor: Actor, bookingId: string, input: z.infer<typeof assignSchema>) {
   if (!input.reason?.trim()) throw new AppError(422, 'VALIDATION_ERROR', 'A reason is required to reassign');
@@ -319,23 +418,44 @@ export async function reassignBooking(actor: Actor, bookingId: string, input: z.
   return withTransaction(async (tx) => {
     const booking = await CabRequest.findById(bookingId).session(tx.session);
     if (!booking) throw notFound('Booking');
-    if (!['ASSIGNED', 'DRIVER_EN_ROUTE'].includes(booking.status)) {
+    if (booking.status !== 'ASSIGNED') {
+      if (['DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'].includes(booking.status)) throw new AppError(409, 'TRIP_STARTED', startedMessage(booking.reference));
       throw new AppError(409, 'INVALID_TRANSITION', `Booking ${booking.reference} is ${booking.status} and cannot be reassigned`);
     }
+    const current = await CabAssignment.findOne({ booking: booking._id, status: 'ACTIVE' }).session(tx.session).lean();
+    if (current && (await tripStarted(tx, current))) throw new AppError(409, 'TRIP_STARTED', startedMessage(booking.reference));
+    if (current && String(current.vehicle) === input.vehicleId && (!input.joinTripId || input.joinTripId === current.tripId)) {
+      throw new AppError(422, 'SAME_CAB', `${booking.reference} is already in this cab. Choose another cab.`);
+    }
     const old = await endActiveAssignment(tx, booking, 'REASSIGNED', actor, input.reason!);
-    const { assignment, driver, vehicle } = await reserve(tx, actor, booking, input.driverId, input.vehicleId);
+    if (old?.tripId) await renameAfterLeaving(tx, old.tripId, booking);
+    const trip = await tripFor(tx, booking, input.driverId, input.vehicleId, input.joinTripId);
+    // IN rides keep their pickup time, unless they join a shared cab (its pickup) or a new one is given.
+    const pickup = trip.pickupTime ?? input.pickupTime;
+    if (pickup) await setInPickupTimes([booking], pickup);
+    const { assignment, driver, vehicle } = await reserve(tx, actor, booking, trip.driverId ?? input.driverId, trip.vehicleId ?? input.vehicleId, undefined, { id: trip.id, name: trip.name });
     if (old) await CabAssignment.updateOne({ _id: old._id }, { $set: { replacedBy: assignment._id } }, { session: tx.session });
     const updated = await transitionBooking(tx, booking._id, [booking.status as BookingStatus], 'ASSIGNED', {
       actor,
       event: 'REASSIGNED',
       reason: input.reason,
       assignmentId: assignment._id,
-      set: { currentAssignment: assignment._id },
-      meta: { driver: driver.driverCode, vehicle: vehicle.registrationNumber, previousAssignment: old ? String(old._id) : undefined },
+      // A new cab starts on time: the old cab's delay doesn't carry over.
+      set: { currentAssignment: assignment._id, isDelayed: false },
+      unset: ['delayReason'],
+      meta: { driver: driver.driverCode, vehicle: vehicle.registrationNumber, previousAssignment: old ? String(old._id) : undefined, ...(trip.joined ? { trip: trip.name } : {}) },
     });
     await notifyAssignment(tx, updated, assignment, driver, vehicle, true);
-    await audit(actor, 'RIDE_REASSIGNED', 'CabAssignment', assignment._id, `${booking.reference} reassigned to ${driver.driverCode} / ${vehicle.registrationNumber}`, { reason: input.reason, previous: old ? String(old._id) : null }, tx.session);
-    return { assignment };
+    await audit(
+      actor,
+      'RIDE_REASSIGNED',
+      'CabAssignment',
+      assignment._id,
+      `${booking.reference} reassigned to ${driver.driverCode} / ${vehicle.registrationNumber}${trip.joined ? ` (shared cab ${trip.name})` : ''}`,
+      { reason: input.reason, previous: old ? String(old._id) : null, tripId: trip.id },
+      tx.session,
+    );
+    return { assignment, tripId: trip.id, tripName: trip.name, joined: trip.joined };
   });
 }
 
@@ -367,6 +487,17 @@ export function defaultTripName(routes: Array<string | null | undefined>) {
   if (!unique.length) return 'Shared cab';
   if (unique.length === 1) return unique[0];
   return `${unique.map((r) => r.replace(/\s+cab$/i, '')).join(' & ')} Cab`;
+}
+
+/**
+ * Is this the automatic name for these routes, in any order ("Kondapur & Gachibowli Cab" for
+ * Gachibowli + Kondapur)? Automatic names follow the riders; a name the coordinator gave is kept.
+ */
+export function isDefaultTripName(name: string, routes: Array<string | null | undefined>) {
+  if (name === defaultTripName(routes)) return true;
+  const parts = (n: string) => n.replace(/\s+cab$/i, '').split(' & ').map((p) => p.trim().toLowerCase()).sort().join('|');
+  const unique = [...new Set(routes.map((r) => r?.trim()).filter((r): r is string => !!r))];
+  return unique.length > 1 && parts(name) === parts(unique.map((r) => r.replace(/\s+cab$/i, '')).join(' & '));
 }
 
 async function routesOf(bookings: Array<{ employee: unknown }>) {
@@ -546,7 +677,7 @@ export async function assignTrip(actor: Actor, input: z.infer<typeof tripSchema>
         const current = members[0].tripName ?? 'Shared cab';
         const memberRoutes = await routesOf(members.map((m) => ({ employee: m.booking?.employee })));
         // Keep a name the coordinator chose; replace the automatic one with one covering every route.
-        tripName = current === defaultTripName(memberRoutes) ? defaultTripName([...memberRoutes, ...(await routesOf(bookings))]) : current;
+        tripName = isDefaultTripName(current, memberRoutes) ? defaultTripName([...memberRoutes, ...(await routesOf(bookings))]) : current;
         if (tripName !== current) await CabAssignment.updateMany({ tripId }, { $set: { tripName } }, { session: tx.session });
       }
       const cab = await Vehicle.findById(vehicleId).session(tx.session).lean();

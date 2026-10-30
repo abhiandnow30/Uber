@@ -104,8 +104,9 @@ export function MapLinkField({
   spotRef.current = spot;
   const onSpotRef = useRef(onSpot);
   onSpotRef.current = onSpot;
-  // The link the current spot was read from: a link that's already been read isn't read again.
+  // The link the current spot was read from (and that spot): a link that's already been read isn't read again.
   const readFor = useRef(spot.pin ? spot.link.trim() : '');
+  const readPin = useRef(spot.pin);
 
   useEffect(() => {
     const text = spot.link.trim();
@@ -114,7 +115,8 @@ export function MapLinkField({
     const typed = parseCoordinates(text);
     if (typed) {
       readFor.current = text;
-      onSpotRef.current({ link: spotRef.current.link, pin: { lat: round(typed.lat), lng: round(typed.lng) } });
+      readPin.current = { lat: round(typed.lat), lng: round(typed.lng) };
+      onSpotRef.current({ link: spotRef.current.link, pin: readPin.current });
       return;
     }
     if (!/^https?:\/\//i.test(text)) {
@@ -128,7 +130,8 @@ export function MapLinkField({
         const p = await get<LatLng>(`${linkPath}?url=${encodeURIComponent(text)}`);
         if (stale) return;
         readFor.current = text;
-        onSpotRef.current({ link: spotRef.current.link, pin: { lat: round(p.lat), lng: round(p.lng) } });
+        readPin.current = { lat: round(p.lat), lng: round(p.lng) };
+        onSpotRef.current({ link: spotRef.current.link, pin: readPin.current });
       } catch (e) {
         if (!stale) setLinkError(errorMessage(e));
       } finally {
@@ -160,7 +163,8 @@ export function MapLinkField({
         <input
           id={`${id}-link`}
           value={spot.link}
-          onChange={(e) => onSpot({ ...spot, link: e.target.value })}
+          // A changed link has no location until it's read: the old one is never saved with the new link.
+          onChange={(e) => onSpot({ link: e.target.value, pin: e.target.value.trim() === readFor.current ? readPin.current : null })}
           onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
           placeholder="Paste the link, e.g. https://maps.app.goo.gl/…"
           inputMode="url"
@@ -195,6 +199,7 @@ export function MapLinkField({
                 type="button"
                 onClick={() => {
                   readFor.current = '';
+                  readPin.current = null;
                   setLinkError('');
                   onSpot({ link: '', pin: null });
                 }}

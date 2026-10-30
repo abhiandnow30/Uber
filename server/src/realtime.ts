@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Server as HttpServer } from 'node:http';
 import { Server, type Socket } from 'socket.io';
 import { parse as parseCookie } from './utils/cookies.js';
@@ -6,6 +7,7 @@ import { logger } from './logger.js';
 import { resolveSession, SESSION_COOKIE } from './services/session.service.js';
 import { Driver } from './models/Driver.js';
 import { Coordinator } from './models/Coordinator.js';
+import { Employee } from './models/Employee.js';
 
 let io: Server | null = null;
 
@@ -64,25 +66,83 @@ export function emitToRole(role: string, event: string, payload: unknown) {
 }
 
 /**
- * "Something changed" to every signed-in screen, so all roles see a change at once. It carries no
- * data: each screen re-fetches through its own API, which only returns what that person may see.
+ * Who a change concerns: the people whose rides it touches, and the offices whose transport team
+ * should see it. Collected while a request runs and announced once, after it has succeeded.
  */
-export function emitDataChanged() {
-  io?.emit('data:changed');
+type ChangeScope = { users: Set<string>; offices: Set<string>; everyone: boolean };
+const changeScope = new AsyncLocalStorage<ChangeScope>();
+
+/** Runs a request with its own change scope; `announce` tells everyone concerned once it has succeeded. */
+export function trackChanges(next: () => void) {
+  const scope: ChangeScope = { users: new Set(), offices: new Set(), everyone: false };
+  changeScope.run(scope, next);
+  return (actor?: { id: string; role: string }) => announceChange(scope, actor).catch((err) => logger.warn({ err }, 'Live update failed'));
+}
+
+/**
+ * Notes who a change concerns. Inside a request it is announced when the request succeeds; from
+ * background work (auto-cancel, late pickups) at once.
+ */
+export function noteChange(c: { users?: unknown[]; offices?: Array<string | null | undefined>; everyone?: boolean }) {
+  const scope = changeScope.getStore();
+  const target = scope ?? { users: new Set<string>(), offices: new Set<string>(), everyone: false };
+  for (const u of c.users ?? []) if (u) target.users.add(String(u));
+  for (const o of c.offices ?? []) if (o) target.offices.add(o);
+  if (c.everyone) target.everyone = true;
+  if (!scope) emitDataChanged(target);
+}
+
+/**
+ * "Something changed" to the screens it concerns: the people whose rides changed, the transport
+ * team of those offices, and admins (who see everything). It carries no data: each screen
+ * re-fetches through its own API, which only returns what that person may see.
+ */
+function emitDataChanged(scope: ChangeScope) {
+  if (!io) return;
+  if (scope.everyone) {
+    io.emit('data:changed');
+    return;
+  }
+  const rooms = ['role:ADMIN', ...[...scope.users].map((u) => `user:${u}`), ...[...scope.offices].map((o) => `office:${o}`)];
+  io.to(rooms).emit('data:changed');
+}
+
+/** A successful request: tells whoever it concerns. When nothing more specific is known, the actor's offices. */
+async function announceChange(scope: ChangeScope, actor?: { id: string; role: string }) {
+  if (!io) return;
+  if (actor?.id) scope.users.add(actor.id);
+  if (!scope.offices.size && !scope.everyone && actor?.id) {
+    if (actor.role === 'COORDINATOR') {
+      for (const o of (await Coordinator.findOne({ user: actor.id }, { officeLocations: 1 }).lean())?.officeLocations ?? []) scope.offices.add(o);
+    } else if (actor.role === 'EMPLOYEE') {
+      const office = (await Employee.findOne({ user: actor.id }, { officeLocation: 1 }).lean())?.officeLocation;
+      if (office) scope.offices.add(office);
+    } else if (actor.role === 'DRIVER') {
+      const office = (await Driver.findOne({ user: actor.id }, { officeLocation: 1 }).lean())?.officeLocation;
+      if (office) scope.offices.add(office);
+    } else if (actor.role === 'ADMIN') {
+      // Admin changes (people, cabs, settings) concern every transport team.
+      io.to(['role:ADMIN', 'role:COORDINATOR', ...[...scope.users].map((u) => `user:${u}`)]).emit('data:changed');
+      return;
+    }
+  }
+  emitDataChanged(scope);
 }
 
 /** Coordinators scoped to an office + all admins. */
 export function emitToOperations(officeLocation: string | undefined, event: string, payload: unknown) {
+  noteChange({ offices: [officeLocation] });
   if (!io) return;
   const rooms = ['role:ADMIN'];
   if (officeLocation) rooms.push(`office:${officeLocation}`);
   io.to(rooms).emit(event, payload);
 }
 
-export async function disconnectUserSockets(userId: string) {
+/** Closes the user's live connections (all, or all but one session's). */
+export async function disconnectUserSockets(userId: string, exceptSessionId?: string) {
   if (!io) return;
   const sockets = await io.in(`user:${userId}`).fetchSockets();
-  for (const s of sockets) s.disconnect(true);
+  for (const s of sockets) if (!exceptSessionId || (s.data.user as { sessionId?: string } | undefined)?.sessionId !== exceptSessionId) s.disconnect(true);
 }
 
 export function closeRealtime() {

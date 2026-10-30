@@ -5,26 +5,27 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Card, ErrorState, Input, PageHeader, Select, Spinner, cn, useToast } from '../../components/ui';
 import { ApiError, errorMessage, get, patch, post } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { addDaysISO, fmtTravelDate, todayISO, uuid } from '../../lib/format';
+import { addDaysISO, currentWorkDay, fmtTravelDate, todayISO, uuid } from '../../lib/format';
 import { fieldErrors } from '../../lib/hooks';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
-import { addMinutesHHmm, cabForShift, fmt12h, IN_LEAD_MINUTES, usePolicy } from '../../lib/policy';
+import { addMinutesHHmm, cabForShift, fmt12h, IN_LEAD_MINUTES, inCabWindow, shiftCabDate, usePolicy } from '../../lib/policy';
 
 type Form = {
+  // The day the shift starts ('' = not chosen yet: the first shift day still bookable is used).
   travelDate: string;
   shift: string;
-  // The shift's times for this day; prefilled from the shift and editable (e.g. 10 PM - 7 AM instead of 9 PM - 6 AM).
-  shiftStart: string;
-  shiftEnd: string;
-  // Only asked when the times allow both an IN and an OUT cab.
+  // Only asked when the shift allows both an IN and an OUT cab.
   direction: '' | 'IN' | 'OUT';
-  // Only for shifts without hours.
+  // When the cab leaves the office (rides home): the shift end by default; the employee may work
+  // late or leave early. Not asked for rides to the office: the transport team sets that pickup.
   pickupTime: string;
 };
 
+const HHMM = /^\d{2}:\d{2}$/;
+
 type CreateResult = { booking: { _id: string; reference: string; status: string }; legs?: Array<{ _id: string; reference: string }>; duplicate: boolean };
 
-const FIELD_FOR_CODE: Record<string, keyof Form> = { BOOKING_WINDOW: 'travelDate', BOOKING_CUTOFF: 'shift', OUTSIDE_CAB_HOURS: 'shift', NO_CAB_FOR_SHIFT: 'shiftStart' };
+const FIELD_FOR_CODE: Record<string, keyof Form> = { BOOKING_WINDOW: 'travelDate', BOOKING_CUTOFF: 'travelDate', OUTSIDE_CAB_HOURS: 'pickupTime', NO_CAB_FOR_SHIFT: 'shift' };
 
 function minutesLabel(m: number) {
   if (m < 60) return `${m} minutes`;
@@ -51,33 +52,53 @@ export default function RequestCab() {
   const activeOffices = useMemo(() => policy?.officeLocations.filter((o) => o.active) ?? [], [policy]);
   const activeShifts = useMemo(() => policy?.shifts.filter((s) => s.active) ?? [], [policy]);
 
-  const [form, setForm] = useState<Form>({ travelDate: '', shift: '', shiftStart: '', shiftEnd: '', direction: '', pickupTime: '' });
+  const [form, setForm] = useState<Form>({ travelDate: '', shift: '', direction: '', pickupTime: '' });
 
   // Cabs are always booked for the employee's own office (that office's coordinators assign them).
   const office = activeOffices.find((o) => o.code === myOffice);
   const tz = office?.timezone ?? 'Asia/Kolkata';
   const today = todayISO(tz);
   const maxDate = policy ? addDaysISO(today, policy.booking.maxDaysAhead) : undefined;
-  const travelDate = form.travelDate || today;
   const selectedShift = activeShifts.find((s) => s.code === form.shift);
-  const hasHours = !!(selectedShift?.startTime && selectedShift.endTime);
+  const shiftStart = selectedShift?.startTime ?? '';
+  const shiftEnd = selectedShift?.endTime ?? '';
+  const hasHours = !!(shiftStart && shiftEnd);
   const shiftRequired = !!policy?.booking.requireShift;
   const winStart = policy?.booking.cabWindowStart;
   const winEnd = policy?.booking.cabWindowEnd;
+  // Night cabs (e.g. 8 PM - 6 AM) belong to the shift that started the evening before: until cab
+  // hours end, last night's shift can still be booked (its cab home may still be to come).
+  const workDay = currentWorkDay(tz, winStart, winEnd);
 
-  // Which cab these shift times get (same rule as the server):
+  // Which cab the shift gets (same rule as the server):
   //  IN  = home → office: reach the office by the shift start; the transport team sets the pickup.
-  //  OUT = office → home: the cab leaves the office when the shift ends.
-  const timesOk = /^\d{2}:\d{2}$/.test(form.shiftStart) && /^\d{2}:\d{2}$/.test(form.shiftEnd) && form.shiftStart !== form.shiftEnd;
-  const can = hasHours && timesOk ? cabForShift(form.shiftStart, form.shiftEnd, winStart, winEnd) : null;
+  //  OUT = office → home: the cab leaves the office at the time chosen, the shift end by default.
+  const can = hasHours ? cabForShift(shiftStart, shiftEnd, winStart, winEnd) : null;
   const both = !!can?.in && !!can?.out;
   const direction: 'IN' | 'OUT' | null = !can ? null : both ? form.direction || (selectedShift?.direction === 'FROM_OFFICE' ? 'OUT' : 'IN') : can.in ? 'IN' : can.out ? 'OUT' : null;
-  const cab =
-    direction === 'IN'
-      ? { date: travelDate, time: form.shiftStart }
-      : direction === 'OUT'
-        ? { date: form.shiftEnd < form.shiftStart ? addDaysISO(travelDate, 1) : travelDate, time: form.shiftEnd }
-        : null;
+  /** The cab's date and time for a shift starting on `date`. */
+  const cabOn = (date: string) => {
+    if (!date || (hasHours && !direction)) return null;
+    if (direction === 'IN') return { date, time: shiftStart };
+    if (!HHMM.test(form.pickupTime)) return null;
+    if (direction === 'OUT') return { date: shiftCabDate(shiftStart, shiftEnd, date, form.pickupTime), time: form.pickupTime };
+    const usual = selectedShift?.defaultPickupTime;
+    return { date: shiftStart && usual ? shiftCabDate(shiftStart, usual, date, form.pickupTime) : date, time: form.pickupTime };
+  };
+  // No date chosen yet: the first shift day whose cab can still be booked. Just after midnight that
+  // is last night's shift when its cab home is still to come, otherwise today's (or tomorrow's).
+  const suggestedDate = (() => {
+    if (!policy) return today;
+    const bookableFrom = DateTime.now().setZone(tz).plus({ minutes: policy.booking.minLeadMinutes });
+    for (let d = workDay, i = 0; i < 3; d = addDaysISO(d, 1), i++) {
+      const c = cabOn(d);
+      if (!c) return today;
+      if (DateTime.fromISO(`${c.date}T${c.time}`, { zone: tz }) >= bookableFrom) return d;
+    }
+    return today;
+  })();
+  const travelDate = form.travelDate || suggestedDate;
+  const cab = cabOn(travelDate);
 
   // The route isn't asked: the server uses the saved home address and the office, and the transport team plans the cab route.
   const homeText = ((me?.profile ?? {}) as { homeAddress?: string }).homeAddress ?? '';
@@ -92,17 +113,17 @@ export default function RequestCab() {
 
   const onShift = (code: string) => {
     const s = activeShifts.find((x) => x.code === code);
-    setForm((f) => ({ ...f, shift: code, shiftStart: s?.startTime ?? '', shiftEnd: s?.endTime ?? '', direction: '', pickupTime: s?.defaultPickupTime ?? f.pickupTime }));
-    setErrors((e) => ({ ...e, shift: undefined, shiftStart: undefined, shiftEnd: undefined, pickupTime: undefined }));
+    // A ride home leaves when the shift ends unless the employee changes it.
+    setForm((f) => ({ ...f, shift: code, direction: '', pickupTime: s?.endTime || s?.defaultPickupTime || f.pickupTime }));
+    setErrors((e) => ({ ...e, shift: undefined, pickupTime: undefined }));
   };
-  const usualTimes = !!selectedShift && form.shiftStart === selectedShift.startTime && form.shiftEnd === selectedShift.endTime;
 
   // Changing an existing ride (?edit=<id>, only while no cab is assigned): the form starts from it.
   const [params] = useSearchParams();
   const editId = params.get('edit') ?? '';
   const editing = useQuery({
     queryKey: ['my-bookings', 'detail', editId],
-    queryFn: () => get<{ _id: string; reference: string; canEdit: boolean; shift?: string; shiftDate?: string; travelDate: string; shiftStart?: string; shiftEnd?: string; direction?: 'IN' | 'OUT'; pickupTime: string }>(`/me/bookings/${editId}`),
+    queryFn: () => get<{ _id: string; reference: string; canEdit: boolean; shift?: string; shiftDate?: string; travelDate: string; direction?: 'IN' | 'OUT'; pickupTime: string }>(`/me/bookings/${editId}`),
     enabled: !!editId,
   });
   const ride = editing.data;
@@ -121,13 +142,13 @@ export default function RequestCab() {
     prefilled.current = true;
     setReady(true);
     if (ride) {
+      const s = activeShifts.find((x) => x.code === ride.shift);
       setForm({
         travelDate: ride.shiftDate ?? ride.travelDate,
         shift: ride.shift ?? '',
-        shiftStart: ride.shiftStart ?? '',
-        shiftEnd: ride.shiftEnd ?? '',
         direction: ride.direction ?? '',
-        pickupTime: ride.pickupTime,
+        // A ride to the office has no pickup of the employee's: switched to a ride home, it starts at the shift end.
+        pickupTime: ride.direction === 'IN' ? s?.endTime || s?.defaultPickupTime || '' : ride.pickupTime,
       });
       return;
     }
@@ -140,17 +161,16 @@ export default function RequestCab() {
     if (!policy) return e;
     const rules = policy.booking;
     if (!travelDate) e.travelDate = 'Choose a date';
-    else if (travelDate < today) e.travelDate = 'The date cannot be in the past';
+    else if (travelDate < workDay) e.travelDate = 'The date cannot be in the past';
     else if (maxDate && travelDate > maxDate) e.travelDate = `You can book at most ${rules.maxDaysAhead} days ahead`;
     if (shiftRequired && !form.shift) e.shift = 'Select your shift';
-    if (hasHours) {
-      if (!/^\d{2}:\d{2}$/.test(form.shiftStart)) e.shiftStart = 'Enter when your shift starts';
-      if (!/^\d{2}:\d{2}$/.test(form.shiftEnd)) e.shiftEnd = 'Enter when your shift ends';
-      else if (form.shiftStart === form.shiftEnd) e.shiftEnd = 'Must differ from the start';
-      else if (!direction) e.shiftStart = 'No cab for these hours';
-    } else if (!/^\d{2}:\d{2}$/.test(form.pickupTime)) e.pickupTime = 'Choose a pickup time';
-    const at = cab ?? (!hasHours && form.pickupTime ? { date: travelDate, time: form.pickupTime } : null);
-    if (at && !e.travelDate && !e.shift) {
+    if (hasHours && !direction) e.shift = 'There is no cab for this shift';
+    else if (direction !== 'IN' && (form.shift || !shiftRequired)) {
+      if (!HHMM.test(form.pickupTime)) e.pickupTime = 'Choose when the cab leaves the office';
+      else if (!inCabWindow(form.pickupTime, winStart, winEnd)) e.pickupTime = `Cabs run between ${fmt12h(winStart)} and ${fmt12h(winEnd)}`;
+    }
+    const at = cab;
+    if (at && !e.travelDate && !e.shift && !e.pickupTime) {
       const scheduled = DateTime.fromISO(`${at.date}T${at.time}`, { zone: tz });
       const now = DateTime.now().setZone(tz);
       if (scheduled < now.plus({ minutes: rules.minLeadMinutes })) e.travelDate = `Book at least ${minutesLabel(rules.minLeadMinutes)} before the cab — choose a later date`;
@@ -181,7 +201,9 @@ export default function RequestCab() {
     const details = {
       travelDate,
       shift: form.shift || undefined,
-      ...(hasHours ? { shiftStart: form.shiftStart, shiftEnd: form.shiftEnd, ...(both && direction ? { direction } : {}) } : { pickupTime: form.pickupTime }),
+      ...(both && direction ? { direction } : {}),
+      // Rides home: when the cab leaves the office. Rides to the office: the transport team sets the pickup.
+      ...(direction !== 'IN' ? { pickupTime: form.pickupTime } : {}),
       officeLocation: myOffice,
     };
     try {
@@ -287,30 +309,17 @@ export default function RequestCab() {
                 label="Shift date"
                 type="date"
                 required
-                min={today}
+                min={workDay}
                 max={maxDate}
                 value={travelDate}
                 onChange={(e) => set('travelDate', e.target.value)}
                 error={errors.travelDate}
-                hint={travelDate ? fmtTravelDate(travelDate) : undefined}
+                hint={travelDate ? `The day your shift starts · ${fmtTravelDate(travelDate)}${travelDate < today ? ' (last night’s shift)' : ''}` : undefined}
               />
             </div>
 
             {hasHours ? (
               <>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Input label="Shift starts" type="time" required value={form.shiftStart} onChange={(e) => set('shiftStart', e.target.value)} error={errors.shiftStart} />
-                  <Input
-                    label="Shift ends"
-                    type="time"
-                    required
-                    value={form.shiftEnd}
-                    onChange={(e) => set('shiftEnd', e.target.value)}
-                    error={errors.shiftEnd}
-                    hint={usualTimes ? 'Your usual hours — change them if they differ that day' : selectedShift ? `Usual: ${fmt12h(selectedShift.startTime)} – ${fmt12h(selectedShift.endTime)}` : undefined}
-                  />
-                </div>
-
                 {both && (
                   <div role="radiogroup" aria-label="Cab" className="grid gap-2 sm:grid-cols-2">
                     {(['IN', 'OUT'] as const).map((d) => (
@@ -323,26 +332,43 @@ export default function RequestCab() {
                         className={cn('rounded-lg border p-3 text-left text-sm', direction === d ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500' : 'border-slate-200 hover:border-slate-400')}
                       >
                         <span className="font-semibold text-slate-900">{d === 'IN' ? 'To the office' : 'Home'}</span>
-                        <span className="block text-slate-500">{d === 'IN' ? `Reach by ${fmt12h(form.shiftStart)}` : `Leave at ${fmt12h(form.shiftEnd)}`}</span>
+                        <span className="block text-slate-500">{d === 'IN' ? `Reach by ${fmt12h(shiftStart)}` : `Leave around ${fmt12h(shiftEnd)}`}</span>
                       </button>
                     ))}
                   </div>
                 )}
 
+                {direction === 'OUT' && (
+                  <Input
+                    label="Cab leaves the office at"
+                    type="time"
+                    required
+                    value={form.pickupTime}
+                    onChange={(e) => set('pickupTime', e.target.value)}
+                    error={errors.pickupTime}
+                    hint={form.pickupTime === shiftEnd ? 'When your shift ends — change it if you leave earlier or work late' : `Your shift ends at ${fmt12h(shiftEnd)}`}
+                  />
+                )}
+
                 {direction && cab ? (
-                  <Alert tone="info" title={direction === 'IN' ? `IN · reach the office by ${fmt12h(cab.time)} on ${fmtTravelDate(cab.date)}` : `OUT · cab leaves the office at ${fmt12h(cab.time)} on ${fmtTravelDate(cab.date)}`}>
+                  <Alert
+                    tone="info"
+                    title={direction === 'IN' ? `To the office · reach by ${fmt12h(cab.time)} on ${fmtTravelDate(cab.date)}` : `Home · cab leaves the office at ${fmt12h(cab.time)} on ${fmtTravelDate(cab.date)}`}
+                  >
                     {direction === 'IN'
-                      ? 'Home → Office. The transport team sets your pickup time and tells you when your cab is assigned.'
-                      : `Office → Home, when your shift ends${cab.date !== travelDate ? ' (the morning after your shift starts)' : ''}.`}
+                      ? 'The transport team sets your pickup time when they assign your cab, and you are told then.'
+                      : cab.date !== travelDate
+                        ? 'The morning after your shift starts.'
+                        : 'The same evening your shift starts.'}
                   </Alert>
-                ) : timesOk ? (
-                  <Alert tone="warn" title="No cab for these shift hours">
+                ) : !direction ? (
+                  <Alert tone="warn" title="No cab for this shift">
                     Cabs take you to the office for shifts starting {fmt12h(inFrom)} – {fmt12h(winEnd)}, or home for shifts ending {fmt12h(winStart)} – before {fmt12h(winEnd)}.
                   </Alert>
                 ) : null}
               </>
             ) : selectedShift || !shiftRequired ? (
-              <Input label="Pickup time" type="time" required value={form.pickupTime} onChange={(e) => set('pickupTime', e.target.value)} error={errors.pickupTime} hint={`Local time (${tz})`} />
+              <Input label="Cab leaves the office at" type="time" required value={form.pickupTime} onChange={(e) => set('pickupTime', e.target.value)} error={errors.pickupTime} hint={`Local time (${tz})`} />
             ) : (
               <p className="text-sm text-slate-500">Select your shift to see your cab.</p>
             )}
@@ -378,7 +404,7 @@ export default function RequestCab() {
               </Alert>
             )}
             <div className="flex flex-wrap gap-2 pt-2">
-              <Button type="submit" size="lg" loading={submitting} disabled={submitting || (hasHours && timesOk && !direction)}>
+              <Button type="submit" size="lg" loading={submitting} disabled={submitting || (hasHours && !direction)}>
                 {ride ? 'Save changes' : 'Submit request'}
               </Button>
               <Button variant="ghost" size="lg" onClick={() => navigate(ride ? `/employee/bookings/${ride._id}` : '/employee')} disabled={submitting}>
@@ -396,7 +422,7 @@ export default function RequestCab() {
                     <strong>To the office:</strong> shifts starting {fmt12h(inFrom)} – {fmt12h(winEnd)}; the transport team sets your pickup time.
                   </li>
                   <li>
-                    <strong>Home:</strong> shifts ending {fmt12h(winStart)} – {fmt12h(winEnd)}; the cab leaves when your shift ends.
+                    <strong>Home:</strong> shifts ending {fmt12h(winStart)} – {fmt12h(winEnd)}; the cab leaves at the time you choose (your shift end unless you change it).
                   </li>
                 </>
               )}

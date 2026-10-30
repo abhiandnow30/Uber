@@ -115,13 +115,13 @@ describe('cab assignment', () => {
     expect(JSON.stringify(home.body)).toContain(String(bookingId));
   });
 
-  it('several rides share one cab as a named trip; another trip still cannot double-book that cab', async () => {
+  it('several rides share one cab as a named trip; a ride at another time still cannot double-book that cab', async () => {
     const coord = await makeCoordinator(['HYD']);
     const drv = await makeDriver({ capacity: 4 });
-    const ride = async (route: string) => {
+    const ride = async (route: string, pickupTime = '22:00') => {
       const e = await makeEmployee();
       await e.employee.updateOne({ $set: { route } });
-      return (await e.client!.post('/api/me/bookings', bookingInput({ pickupTime: '22:00' })).expect(201)).body.booking._id as string;
+      return (await e.client!.post('/api/me/bookings', bookingInput({ pickupTime })).expect(201)).body.booking._id as string;
     };
     const ids = [await ride('Kondapur Cab'), await ride('Madhapur Cab')];
 
@@ -140,8 +140,13 @@ describe('cab assignment', () => {
     await coord.client.patch(`/api/ops/trips/${trip.body.tripId}`, { name: 'Kondapur-Madhapur Night Cab' }).expect(200);
     expect(await CabAssignment.countDocuments({ tripId: trip.body.tripId, tripName: 'Kondapur-Madhapur Night Cab' })).toBe(2);
 
-    // a separate ride at the same time is a different trip: the cab is taken
-    const other = await ride('Miyapur Cab');
+    // a ride at the same time assigned on its own to that cab shares it (one cab, one trip); the name the coordinator gave stays
+    const same = await ride('Miyapur Cab');
+    expect((await assign(coord.client, same, drv)).status).toBe(201);
+    expect(await CabAssignment.countDocuments({ tripId: trip.body.tripId, status: 'ACTIVE', tripName: 'Kondapur-Madhapur Night Cab' })).toBe(3);
+
+    // a ride at another time that overlaps the trip: the cab is taken
+    const other = await ride('Miyapur Cab', '21:30');
     const clash = await assign(coord.client, other, drv);
     expect(clash.status).toBe(409);
     expect(clash.body.error.code).toBe('SCHEDULE_CONFLICT');
@@ -153,7 +158,8 @@ describe('cab assignment', () => {
     const ride = async (route: string, pickupTime: string) => {
       const e = await makeEmployee();
       await e.employee.updateOne({ $set: { route } });
-      const res = await e.client!.post('/api/me/bookings', bookingInput({ pickupTime }));
+      // Two days ahead: "tomorrow 1 AM" is within the booking notice late in the evening.
+      const res = await e.client!.post('/api/me/bookings', bookingInput({ pickupTime, travelDate: futureDate(2) }));
       expect(res.status, JSON.stringify(res.body)).toBe(201);
       return res.body.booking._id as string;
     };

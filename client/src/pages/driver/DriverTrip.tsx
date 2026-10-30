@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCircle2, ChevronDown, ChevronUp, MapPin, Navigation, Route, Users, XCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronUp, MapPin, Navigation, Route, Users, Wrench, XCircle } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, ErrorState, Spinner, cn, useToast } from '../../components/ui';
 import { ApiError, errorMessage, get, post } from '../../lib/api';
 import { fmt12h, fmtTravelDate } from '../../lib/format';
 import { multiStopRouteUrl, navigationUrl } from '../../lib/maps';
-import { DriverCancelDialog, PinPanel, type Ride } from './DriverRide';
+import { CabProblemDialog, DriverCancelDialog, PinPanel, type Ride } from './DriverRide';
 
 type Trip = { tripId: string; tripName: string; direction: 'IN' | 'OUT'; rides: Ride[] };
 
@@ -50,6 +50,7 @@ export default function DriverTrip() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const [cancelFor, setCancelFor] = useState<Ride | null>(null);
+  const [problem, setProblem] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['driver', 'trip', tripId],
@@ -361,6 +362,27 @@ export default function DriverTrip() {
         </Step>
       )}
 
+      {/* Puncture, out of fuel...: riders not yet picked up go back to the coordinator for another cab. */}
+      {rides.some((r) => r.assignmentStatus === 'ACTIVE' && ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'].includes(r.booking?.status ?? '')) && (
+        <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setProblem(true)} icon={<Wrench className="h-5 w-5" aria-hidden />}>
+          Cab problem
+        </Button>
+      )}
+      <CabProblemDialog
+        open={problem}
+        shared
+        onClose={() => setProblem(false)}
+        onConfirm={async (reason, note) => {
+          const first = rides.find((r) => r.assignmentStatus === 'ACTIVE')!;
+          const res = await post<{ released: number; onBoard: number }>(`/driver/rides/${first.assignmentId}/problem`, { reason, ...(note ? { note } : {}) });
+          toast.success(
+            `${res.released} ${res.released === 1 ? 'rider' : 'riders'} handed back — the coordinator is assigning another cab`,
+            res.onBoard ? `Riders already in your cab (${res.onBoard}) stay with you.` : undefined,
+          );
+          await done();
+          if (!res.onBoard) navigate('/driver');
+        }}
+      />
       <DriverCancelDialog
         open={!!cancelFor}
         arrived={cancelFor?.booking?.status === 'ARRIVED'}

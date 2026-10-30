@@ -111,6 +111,11 @@ export function EmployeeFormModal({ open, onClose, employee, onSaved }: { open: 
     setErrors(v);
     setError('');
     if (Object.keys(v).length) return false;
+    // A new link that hasn't been read yet has no location: saving now would drop the home's location.
+    if (spot.link.trim() && !spot.pin) {
+      setError('The Google Maps link is still being read or could not be read. Check the link (or clear it), then save.');
+      return false;
+    }
     setBusy(true);
     try {
       let id: string;

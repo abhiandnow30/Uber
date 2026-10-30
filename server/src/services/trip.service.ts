@@ -22,6 +22,7 @@ async function currentDriver(actor: Actor) {
   if (actor.role !== 'DRIVER') throw forbidden();
   const driver = await Driver.findOne({ user: actor.id });
   if (!driver) throw forbidden('No driver profile is linked to this account');
+  if (driver.employmentStatus !== 'ACTIVE') throw new AppError(403, 'DRIVER_NOT_ACTIVE', 'Your driver account is not active. Please contact your transport coordinator.');
   return driver;
 }
 
@@ -330,7 +331,7 @@ export async function markEnRoute(actor: Actor, assignmentId: string) {
   return withTransaction(async (tx) => {
     const now = new Date();
     await CabAssignment.updateOne({ _id: assignment._id, status: 'ACTIVE' }, { $set: { enRouteAt: now, acknowledgedAt: assignment.acknowledgedAt ?? now } }, { session: tx.session });
-    const updated = await transitionBooking(tx, booking._id, ['ASSIGNED'], 'DRIVER_EN_ROUTE', { actor, event: 'DRIVER_EN_ROUTE', assignmentId: assignment._id });
+    const updated = await transitionBooking(tx, booking._id, ['ASSIGNED'], 'DRIVER_EN_ROUTE', { actor, event: 'DRIVER_EN_ROUTE', assignmentId: assignment._id, current: assignment._id });
     await notifyInApp(tx, { userId: String(booking.employeeUser), type: 'DRIVER_EN_ROUTE', title: 'Your driver is on the way', body: `${booking.reference}: driver is heading to ${booking.pickupLocation}`, data: { bookingId: String(booking._id) }, idempotencyKey: `enroute:${assignment._id}` });
     await audit(actor, 'RIDE_EN_ROUTE', 'CabAssignment', assignment._id, `Driver en route for ${booking.reference}`, undefined, tx.session);
     return updated;
@@ -342,7 +343,7 @@ export async function markArrived(actor: Actor, assignmentId: string) {
   requireActive(assignment);
   return withTransaction(async (tx) => {
     await CabAssignment.updateOne({ _id: assignment._id, status: 'ACTIVE' }, { $set: { arrivedAt: new Date() } }, { session: tx.session });
-    const updated = await transitionBooking(tx, booking._id, ['DRIVER_EN_ROUTE'], 'ARRIVED', { actor, event: 'ARRIVED', assignmentId: assignment._id });
+    const updated = await transitionBooking(tx, booking._id, ['DRIVER_EN_ROUTE'], 'ARRIVED', { actor, event: 'ARRIVED', assignmentId: assignment._id, current: assignment._id });
     const employee = await Employee.findById(booking.employee).session(tx.session).lean();
     const vehicle = await mongoose.model('Vehicle').findById(assignment.vehicle).session(tx.session).lean<{ registrationNumber: string }>();
     await notifyInApp(tx, { userId: String(booking.employeeUser), type: 'DRIVER_ARRIVED', title: 'Your cab has arrived', body: `${vehicle?.registrationNumber} is at ${booking.pickupLocation}. Share your PIN once you are in the cab.`, data: { bookingId: String(booking._id) }, idempotencyKey: `arrived:${assignment._id}` });
@@ -422,7 +423,7 @@ export async function verifyPinAndStart(actor: Actor, assignmentId: string, pin:
       { new: true, session: tx.session },
     );
     if (!started) throw new AppError(409, 'ALREADY_STARTED', 'This trip has already started');
-    const updated = await transitionBooking(tx, booking._id, ['ARRIVED'], 'IN_PROGRESS', { actor, event: 'TRIP_STARTED', assignmentId: assignment._id, meta: { method: 'PIN' } });
+    const updated = await transitionBooking(tx, booking._id, ['ARRIVED'], 'IN_PROGRESS', { actor, event: 'TRIP_STARTED', assignmentId: assignment._id, current: assignment._id, meta: { method: 'PIN' } });
     await refreshDriverAvailability(driver._id, tx.session);
     await notifyTripStarted(tx, updated);
     await audit(actor, 'RIDE_STARTED', 'CabAssignment', assignment._id, `Trip ${booking.reference} started with verified PIN`, undefined, tx.session);
@@ -477,6 +478,7 @@ async function finishTrip(actor: Actor, refs: TripRefs, opts: { notes?: string; 
       event: opts.override ? 'COMPLETED_OVERRIDE' : 'COMPLETED',
       reason: opts.override?.reason,
       assignmentId: assignment._id,
+      current: assignment._id,
       set: { completedAt, isDelayed: false },
       unset: ['openSlotKey'],
     });
@@ -511,7 +513,7 @@ async function finishTrip(actor: Actor, refs: TripRefs, opts: { notes?: string; 
 async function recordNoShow(actor: Actor, refs: TripRefs, reason: string, byOperations = false) {
   const { driverId, assignment, booking } = refs;
   return withTransaction(async (tx) => {
-    const updated = await transitionBooking(tx, booking._id, ['ARRIVED'], 'NO_SHOW', { actor, event: 'NO_SHOW', reason, assignmentId: assignment._id, unset: ['openSlotKey'] });
+    const updated = await transitionBooking(tx, booking._id, ['ARRIVED'], 'NO_SHOW', { actor, event: 'NO_SHOW', reason, assignmentId: assignment._id, current: assignment._id, unset: ['openSlotKey'] });
     await endActiveAssignment(tx, updated, 'NO_SHOW', actor, reason);
     await refreshDriverAvailability(driverId as string, tx.session);
     await alertOperations({ type: 'NO_SHOW', message: `Employee no-show for ${booking.reference}: ${reason}${byOperations ? ' (recorded by transport team)' : ''}`, officeLocation: booking.officeLocation, bookingId: String(booking._id), dedupeKey: `NO_SHOW:${assignment._id}` }, tx);
@@ -554,9 +556,84 @@ export async function driverCancel(actor: Actor, assignmentId: string, input: z.
     return recordNoShow(actor, { driverId: driver._id, assignment, booking }, text);
   }
   if (!['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'].includes(booking.status)) throw new AppError(409, 'INVALID_TRANSITION', `This ride is ${booking.status.toLowerCase()} and can't be cancelled`);
-  const updated = await cancelBookingInternal(actor, booking._id, `Cancelled by driver: ${text}`, ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED']);
+  const updated = await cancelBookingInternal(actor, booking._id, `Cancelled by driver: ${text}`, ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'], {}, assignment._id);
   await refreshDriverAvailability(driver._id);
   return updated;
+}
+
+/** Riders the cab hasn't picked up yet: these can still be given another cab. */
+const NOT_PICKED_UP: BookingStatus[] = ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'];
+
+/**
+ * The cab can't do these rides (breakdown, out of fuel, the driver is no longer working...): every
+ * rider not yet picked up goes back to the coordinator's queue, keeping their pickup time, to be
+ * given another cab. Riders already in the cab stay with it. Returns the rides sent back.
+ */
+export async function releaseRides(tx: TxContext, assignments: Array<{ _id: unknown; booking: unknown }>, actor: Actor, reason: string) {
+  const released: CabRequestDoc[] = [];
+  for (const a of assignments) {
+    const booking = await CabRequest.findById(a.booking).session(tx.session);
+    if (!booking || !NOT_PICKED_UP.includes(booking.status as BookingStatus) || String(booking.currentAssignment) !== String(a._id)) continue;
+    const now = new Date();
+    const ended = await CabAssignment.findOneAndUpdate(
+      { _id: a._id, status: 'ACTIVE' },
+      { $set: { status: 'DECLINED', declinedAt: now, declineReason: reason, endedAt: now, endedBy: actor.id || undefined, endReason: reason } },
+      { new: true, session: tx.session },
+    );
+    if (!ended) continue;
+    await RideStartCredential.updateMany({ assignment: a._id, status: 'ACTIVE' }, { $set: { status: 'REVOKED', revokedAt: now, revokeReason: 'CAB_UNAVAILABLE' } }, { session: tx.session });
+    const back: BookingStatus = booking.approvalRequired ? 'APPROVED' : 'REQUESTED';
+    const updated = await transitionBooking(tx, booking._id, [booking.status as BookingStatus], back, {
+      actor,
+      event: 'CAB_UNAVAILABLE',
+      reason,
+      assignmentId: a._id,
+      current: a._id,
+      set: { isDelayed: false },
+      unset: ['currentAssignment', 'delayReason'],
+    });
+    await notifyInApp(tx, {
+      userId: String(booking.employeeUser),
+      type: 'ASSIGNMENT_PENDING_CHANGE',
+      title: 'Your cab is being changed',
+      body: `${booking.reference}: the cab can't make it (${reason}). The transport team is assigning another cab.`,
+      data: { bookingId: String(booking._id) },
+      idempotencyKey: `released-employee:${a._id}`,
+    });
+    released.push(updated);
+  }
+  return released;
+}
+
+export const CAB_PROBLEM_REASONS = { BREAKDOWN: 'Puncture or breakdown', FUEL: 'Out of fuel', OTHER: 'Other' } as const;
+export const cabProblemSchema = z
+  .object({ reason: z.enum(['BREAKDOWN', 'FUEL', 'OTHER']), note: z.string().trim().max(300).optional() })
+  .refine((v) => v.reason !== 'OTHER' || (v.note?.length ?? 0) >= 3, { message: 'Say what happened', path: ['note'] });
+
+/**
+ * The driver's cab can't do the trip (puncture, out of fuel...). Every rider of the trip not yet
+ * picked up goes back to the coordinator, who assigns another cab; riders already in the cab stay.
+ */
+export async function reportCabProblem(actor: Actor, assignmentId: string, input: z.infer<typeof cabProblemSchema>) {
+  const { driver, assignment } = await myAssignment(actor, assignmentId);
+  requireActive(assignment);
+  const text = input.reason === 'OTHER' ? input.note! : `${CAB_PROBLEM_REASONS[input.reason]}${input.note ? ` — ${input.note}` : ''}`;
+  return withTransaction(async (tx) => {
+    const rides = assignment.tripId ? await CabAssignment.find({ tripId: assignment.tripId, driver: driver._id, status: 'ACTIVE' }).session(tx.session).lean() : [assignment];
+    const released = await releaseRides(tx, rides, actor, text);
+    if (!released.length) throw new AppError(409, 'INVALID_TRANSITION', 'Your passengers are already in the cab. Please call your transport coordinator.');
+    const onBoard = rides.length - released.length;
+    await notifyCoordinators(tx, released[0].officeLocation, {
+      type: 'DRIVER_DECLINED',
+      title: 'Cab problem — assign another cab',
+      body: `${driver.fullName}: ${text}. Waiting for a cab: ${released.map((b) => b.reference).join(', ')}${onBoard ? ` (${onBoard} already in the cab)` : ''}.`,
+      data: { bookingId: String(released[0]._id) },
+      idempotencyKey: `cab-problem:${assignment._id}`,
+    });
+    await refreshDriverAvailability(driver._id, tx.session);
+    await audit(actor, 'CAB_PROBLEM', 'CabAssignment', assignment._id, `Cab problem reported by ${driver.driverCode}: ${text}`, { released: released.map((b) => b.reference) }, tx.session);
+    return { released: released.length, onBoard };
+  });
 }
 
 /** Coordinator/admin view of the booking's live assignment (scope-checked). */

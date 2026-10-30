@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCircle2, KeyRound, MapPin, Navigation, PlayCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, KeyRound, MapPin, Navigation, PlayCircle, Wrench } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, Card, DescriptionList, ErrorState, Modal, Select, Spinner, StatusBadge, Textarea, cn, useToast } from '../../components/ui';
@@ -188,7 +188,7 @@ export default function DriverRide() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notActive, setNotActive] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<'cancel' | null>(null);
+  const [dialog, setDialog] = useState<'cancel' | 'problem' | null>(null);
   const [note, setNote] = useState('');
   const [noteDirty, setNoteDirty] = useState(false);
   const [noteBusy, setNoteBusy] = useState(false);
@@ -309,14 +309,16 @@ export default function DriverRide() {
   const status = b?.status;
   const terminal = !isActive || !status || ['COMPLETED', 'CANCELLED', 'NO_SHOW', 'REJECTED'].includes(status);
 
-  // Drivers may cancel only because of the employee (not coming, didn't show up, other); for their
-  // own reasons they call the coordinator, who changes the cab.
+  // Cancel: because of the passenger (not coming, didn't show up). A problem with the cab (puncture,
+  // out of fuel) sends the ride back to the coordinator, who gives the passenger another cab.
   const cancelButton = (
-    <div className="space-y-1 text-center">
+    <div className="grid gap-2 sm:grid-cols-2">
       <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setDialog('cancel')}>
-        Cancel ride
+        Passenger not coming
       </Button>
-      <p className="text-xs text-slate-500">Only if the passenger isn&apos;t coming. Can&apos;t make it yourself? Call your transport coordinator.</p>
+      <Button size="lg" variant="secondary" className="w-full" disabled={busy} onClick={() => setDialog('problem')} icon={<Wrench className="h-5 w-5" aria-hidden />}>
+        Cab problem
+      </Button>
     </div>
   );
 
@@ -480,6 +482,14 @@ export default function DriverRide() {
           confirmAction('cancel', reason === 'NO_SHOW' ? 'Ride closed as no-show' : 'Ride cancelled — the coordinator is informed', { reason, ...(note ? { note } : {}) }).then(() => refetch())
         }
       />
+      <CabProblemDialog
+        open={dialog === 'problem'}
+        shared={!!ride.tripId}
+        onClose={() => setDialog(null)}
+        onConfirm={(reason, note) =>
+          confirmAction('problem', 'The coordinator is assigning another cab', { reason, ...(note ? { note } : {}) }).then(() => navigate('/driver'))
+        }
+      />
     </div>
   );
 }
@@ -552,6 +562,75 @@ export function DriverCancelDialog({ open, arrived, onClose, onConfirm }: { open
           onChange={(e) => setNote(e.target.value)}
         />
         <p className="text-xs text-slate-500">The passenger and the transport coordinator are informed.</p>
+        {error && <Alert tone="error">{error}</Alert>}
+      </div>
+    </Modal>
+  );
+}
+
+export type CabProblemReason = 'BREAKDOWN' | 'FUEL' | 'OTHER';
+
+/**
+ * The cab can't do the trip (puncture, out of fuel...). Every passenger not yet picked up goes back
+ * to the coordinator, who assigns another cab; passengers already in the cab stay with it.
+ */
+export function CabProblemDialog({ open, shared, onClose, onConfirm }: { open: boolean; shared: boolean; onClose: () => void; onConfirm: (reason: CabProblemReason, note: string) => Promise<unknown> }) {
+  const [reason, setReason] = useState<CabProblemReason | ''>('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setReason('');
+      setNote('');
+      setError('');
+    }
+  }, [open]);
+  // Saving here would mean giving up the ride, so a chosen reason can only be kept or discarded.
+  const guard = useUnsavedChanges(open && (!!reason || !!note.trim()));
+  const close = () => guard(onClose);
+  const submit = async () => {
+    if (!reason) return setError('Choose what happened');
+    if (reason === 'OTHER' && note.trim().length < 3) return setError('Say what happened');
+    setBusy(true);
+    setError('');
+    try {
+      await onConfirm(reason, note.trim());
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={busy ? () => undefined : close}
+      title="Problem with the cab?"
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={close} disabled={busy}>
+            Keep the trip
+          </Button>
+          <Button variant="danger" onClick={submit} loading={busy} disabled={!reason}>
+            Hand back to coordinator
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Select label="What happened?" required value={reason} onChange={(e) => setReason(e.target.value as CabProblemReason)}>
+          <option value="">Choose…</option>
+          <option value="BREAKDOWN">Puncture or breakdown</option>
+          <option value="FUEL">Out of fuel</option>
+          <option value="OTHER">Other</option>
+        </Select>
+        <Textarea label={reason === 'OTHER' ? 'Details' : 'Details (optional)'} required={reason === 'OTHER'} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
+        <p className="text-xs text-slate-500">
+          {shared ? 'Everyone in this cab not yet picked up' : 'The passenger'} gets another cab from the coordinator, and is told. Passengers already in your cab stay with you.
+        </p>
         {error && <Alert tone="error">{error}</Alert>}
       </div>
     </Modal>

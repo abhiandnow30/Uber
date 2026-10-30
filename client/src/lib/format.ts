@@ -1,9 +1,11 @@
 import { DateTime } from 'luxon';
 
+/** Times are shown in office time (a phone or laptop set to another zone shows the same as everyone else). */
+const OFFICE_ZONE = 'Asia/Kolkata';
+
 export function fmtDateTime(iso?: string | null, zone?: string) {
   if (!iso) return '—';
-  const d = DateTime.fromISO(iso);
-  return (zone ? d.setZone(zone) : d).toFormat('dd LLL yyyy, h:mm a');
+  return DateTime.fromISO(iso).setZone(zone || OFFICE_ZONE).toFormat('dd LLL yyyy, h:mm a');
 }
 
 export function fmtDate(iso?: string | null) {

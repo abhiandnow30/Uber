@@ -114,7 +114,7 @@ authRouter.post('/password/reset', authLimiter, async (req, res) => {
 
 authRouter.post('/password/change', requireAuth, authLimiter, async (req, res) => {
   const input = body(z.object({ currentPassword: z.string().max(200), newPassword: z.string().max(200) }), req);
-  await changePassword(String(req.auth!.user._id), input.currentPassword, input.newPassword, actorFromRequest(req));
+  await changePassword(String(req.auth!.user._id), input.currentPassword, input.newPassword, actorFromRequest(req), req.auth!.sessionId);
   res.json({ ok: true });
 });
 

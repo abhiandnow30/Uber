@@ -66,6 +66,25 @@ export function cabForShift(start: string, end: string, winStart?: string, winEn
   return { in: offset(start) >= IN_LEAD_MINUTES && offset(start) <= span, out: offset(end) < span };
 }
 
+/**
+ * Date of a shift's cab at `time`: whichever day puts it closest to the shift's usual cab time
+ * `usual` (same rule as the server). For a 4 PM - 1 AM shift: 11 PM is that evening, 1 AM or
+ * 2 AM the morning after.
+ */
+export function shiftCabDate(start: string, usual: string, shiftDate: string, time: string) {
+  const usualOffset = toMin(usual) + (usual < start ? 1440 : 0);
+  const next = Math.abs(toMin(time) + 1440 - usualOffset) < Math.abs(toMin(time) - usualOffset);
+  if (!next) return shiftDate;
+  const [y, mo, d] = shiftDate.split('-').map(Number);
+  return new Date(Date.UTC(y, mo - 1, d + 1)).toISOString().slice(0, 10);
+}
+
+/** Is HH:mm inside cab hours? They may cross midnight (8 PM - 6 AM). No hours set = always. */
+export function inCabWindow(time: string, start?: string, end?: string) {
+  if (!start || !end) return true;
+  return start <= end ? time >= start && time <= end : time >= start || time <= end;
+}
+
 /** "20:00" + 60 → "21:00" */
 export const addMinutesHHmm = (t: string, m: number) => {
   const v = (toMin(t) + m + 1440) % 1440;

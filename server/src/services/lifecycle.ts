@@ -1,9 +1,10 @@
 import type { TxContext } from '../db.js';
 import { canTransitionBooking, TERMINAL_STATUSES, type BookingStatus } from '../domain.js';
-import { CabRequest, TripStatusHistory, type CabRequestDoc } from '../models/booking.js';
+import { CabAssignment, CabRequest, TripStatusHistory, type CabRequestDoc } from '../models/booking.js';
 import { Coordinator } from '../models/Coordinator.js';
+import { Driver } from '../models/Driver.js';
 import { User } from '../models/User.js';
-import { emitDataChanged, emitToOperations, emitToUser } from '../realtime.js';
+import { emitToOperations, emitToUser, noteChange } from '../realtime.js';
 import { AppError } from '../utils/errors.js';
 import { fmt12h } from '../utils/time.js';
 import type { Actor } from './audit.service.js';
@@ -19,7 +20,17 @@ export async function transitionBooking(
   bookingId: unknown,
   from: BookingStatus[],
   to: BookingStatus,
-  opts: { actor: Actor; event: string; reason?: string; assignmentId?: unknown; set?: Record<string, unknown>; unset?: string[]; meta?: Record<string, unknown> },
+  opts: {
+    actor: Actor;
+    event: string;
+    reason?: string;
+    assignmentId?: unknown;
+    // Only while this is still the ride's cab: a driver's tap can't land on a ride just given to another cab.
+    current?: unknown;
+    set?: Record<string, unknown>;
+    unset?: string[];
+    meta?: Record<string, unknown>;
+  },
 ): Promise<CabRequestDoc> {
   for (const f of from) {
     if (!canTransitionBooking(f, to)) throw new Error(`Programming error: ${f} → ${to} is not an allowed transition`);
@@ -27,10 +38,14 @@ export async function transitionBooking(
   // A finished ride (cancelled, completed...) is no longer running late.
   const update: Record<string, unknown> = { $set: { status: to, ...(TERMINAL_STATUSES.includes(to) ? { isDelayed: false } : {}), ...(opts.set ?? {}) } };
   if (opts.unset?.length) update.$unset = Object.fromEntries(opts.unset.map((k) => [k, 1]));
-  const updated = await CabRequest.findOneAndUpdate({ _id: bookingId, status: { $in: from } }, update, { new: true, session: tx.session });
+  const filter = { _id: bookingId, status: { $in: from }, ...(opts.current ? { currentAssignment: opts.current } : {}) };
+  const updated = await CabRequest.findOneAndUpdate(filter, update, { new: true, session: tx.session });
   if (!updated) {
     const current = await CabRequest.findById(bookingId).session(tx.session).lean();
     if (!current) throw new AppError(404, 'NOT_FOUND', 'Booking not found');
+    if (opts.current && from.includes(current.status as BookingStatus) && String(current.currentAssignment) !== String(opts.current)) {
+      throw new AppError(409, 'ASSIGNMENT_NOT_ACTIVE', `${current.reference} is no longer assigned to this cab`);
+    }
     throw new AppError(409, 'INVALID_TRANSITION', `Booking ${current.reference} is ${current.status}; cannot move to ${to}`);
   }
   const previous = from.length === 1 ? from[0] : undefined;
@@ -50,7 +65,7 @@ export async function transitionBooking(
     ],
     { session: tx.session },
   );
-  tx.afterCommit(() => broadcastBookingUpdate(updated));
+  tx.afterCommit(() => broadcastBookingUpdate(updated, opts.assignmentId));
   return updated;
 }
 
@@ -68,12 +83,22 @@ export async function recordEvent(
   );
 }
 
-export function broadcastBookingUpdate(b: { _id: unknown; reference: string; status: string; officeLocation: string; employeeUser: unknown; isDelayed?: boolean | null }) {
+/**
+ * A ride changed: its employee, its office's transport team and the driver of its cab (the one it
+ * has now, or the one this change concerned) see it at once. Also covers background changes
+ * (e.g. auto-cancel), which no API request announces.
+ */
+export async function broadcastBookingUpdate(
+  b: { _id: unknown; reference: string; status: string; officeLocation: string; employeeUser: unknown; isDelayed?: boolean | null; currentAssignment?: unknown },
+  assignmentId?: unknown,
+) {
   const payload = { bookingId: String(b._id), reference: b.reference, status: b.status, isDelayed: !!b.isDelayed };
   emitToOperations(b.officeLocation, 'booking:updated', payload);
   emitToUser(String(b.employeeUser), 'booking:updated', payload);
-  // Also covers changes made in the background (e.g. auto-cancel), which no API request announces.
-  emitDataChanged();
+  const cab = assignmentId ?? b.currentAssignment;
+  const driverId = cab ? (await CabAssignment.findById(cab, { driver: 1 }).lean())?.driver : undefined;
+  const driverUser = driverId ? (await Driver.findById(driverId, { user: 1 }).lean())?.user : undefined;
+  noteChange({ users: [b.employeeUser, driverUser], offices: [b.officeLocation] });
 }
 
 /** In-app notification for every active coordinator scoped to the office. */

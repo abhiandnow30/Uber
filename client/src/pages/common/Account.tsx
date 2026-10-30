@@ -113,7 +113,7 @@ function CabDetailsCard() {
 
   const save = async (): Promise<boolean> => {
     if (!spot.pin) {
-      setErrors({ form: 'Add your home’s Google Maps link before saving.' });
+      setErrors({ form: spot.link.trim() ? 'Your Google Maps link is still being read or could not be read. Check the link, then save.' : 'Add your home’s Google Maps link before saving.' });
       return false;
     }
     if (!addressOk) {

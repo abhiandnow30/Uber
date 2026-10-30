@@ -10,7 +10,7 @@ import { AppError, badRequest, forbidden } from '../utils/errors.js';
 import { formatInZone } from '../utils/time.js';
 import { audit, type Actor } from './audit.service.js';
 import { enqueueEmail } from './notification.service.js';
-import { createSession, revokeAllSessions } from './session.service.js';
+import { createSession, revokeAllSessions, revokeOtherSessions } from './session.service.js';
 
 export const ACTIVATION_TTL_HOURS = 72;
 export const RESET_TTL_MINUTES = 30;
@@ -221,7 +221,7 @@ export async function resetPassword(token: string, password: string, meta: { ip?
   await revokeAllSessions(user._id, 'PASSWORD_RESET');
 }
 
-export async function changePassword(userId: string, current: string, next: string, actor: Actor) {
+export async function changePassword(userId: string, current: string, next: string, actor: Actor, keepSessionId?: string) {
   const user = await User.findById(userId).select('+passwordHash');
   if (user && !usesPassword(user.role)) throw forbidden('This account has no password: it signs in with Microsoft or a mobile number');
   if (!user || !(await verifyPassword(current, user.passwordHash))) throw forbidden('Current password is incorrect');
@@ -230,6 +230,9 @@ export async function changePassword(userId: string, current: string, next: stri
   user.passwordHash = await hashPassword(next);
   user.passwordChangedAt = new Date();
   await user.save();
+  // Anyone signed in with the old password elsewhere is signed out; this device stays signed in.
+  if (keepSessionId) await revokeOtherSessions(user._id, keepSessionId, 'PASSWORD_CHANGED');
+  else await revokeAllSessions(user._id, 'PASSWORD_CHANGED');
   await audit(actor, 'PASSWORD_CHANGED', 'User', user._id, 'Password changed');
   logger.info({ userId }, 'Password changed');
 }

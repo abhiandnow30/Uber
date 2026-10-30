@@ -9,7 +9,7 @@ import { pinoHttp } from 'pino-http';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { metrics } from './metrics.js';
-import { emitDataChanged } from './realtime.js';
+import { trackChanges } from './realtime.js';
 import { csrfProtection, loadSession, requireAuth } from './middleware/auth.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/common.js';
 import { EmailOutbox } from './models/system.js';
@@ -79,15 +79,17 @@ export function createApp() {
 
   // ---- API ----
   const api = Router();
-  // Every successful change, by any role, refreshes everyone's open screens (see emitDataChanged).
+  // Every successful change refreshes the open screens it concerns: the people whose rides it
+  // touches, that office's transport team, and admins (see noteChange in realtime.ts).
   // Skipped: sign-in/password requests, marking one's own notifications read, and the one POST
   // that only looks things up (it would make screens refresh each other in a loop).
   api.use((req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || /^\/(auth|notifications)\//.test(req.path) || req.path === '/ops/trips/eligible') return next();
+    let announce: ReturnType<typeof trackChanges> | undefined;
     res.on('finish', () => {
-      if (res.statusCode < 400) emitDataChanged();
+      if (res.statusCode < 400) void announce?.(req.auth?.actor);
     });
-    next();
+    announce = trackChanges(next);
   });
   api.use(loadSession);
   api.use(apiLimiter);

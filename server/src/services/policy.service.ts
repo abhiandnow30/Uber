@@ -3,6 +3,7 @@ import { Policy, type PolicyAttrs } from '../models/Policy.js';
 import { badRequest, notFound } from '../utils/errors.js';
 import { fmt12h, isValidTimezone, TIME_RE } from '../utils/time.js';
 import { audit, type Actor } from './audit.service.js';
+import { noteChange } from '../realtime.js';
 
 export type PolicyView = PolicyAttrs & { _id: unknown };
 
@@ -170,6 +171,8 @@ export async function updatePolicy(actor: Actor, input: z.infer<typeof policyUpd
   }
   const updated = await Policy.findOneAndUpdate({ key: 'global' }, { $set: set, $inc: { version: 1 } }, { new: true });
   invalidatePolicyCache();
+  // Shifts, offices and booking rules show on everyone's screens.
+  noteChange({ everyone: true });
   await audit(actor, 'POLICY_UPDATED', 'Policy', updated?._id, `Booking policy updated to v${updated?.version}`, {
     changes: input,
   });

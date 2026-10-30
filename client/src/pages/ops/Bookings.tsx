@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Car, CheckCircle2, ChevronDown, Clock, MapPin, User, Users } from 'lucide-react';
+import { AlertTriangle, Car, CheckCircle2, ChevronDown, Clock, User } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import {
@@ -20,12 +20,11 @@ import {
   Spinner,
   StatusBadge,
   Tabs,
-  Textarea,
   cn,
   useToast,
   type Column,
 } from '../../components/ui';
-import { ApiError, errorMessage, get, patch, post, qs } from '../../lib/api';
+import { ApiError, errorMessage, patch, post, qs } from '../../lib/api';
 import { useUnsavedChanges } from '../../lib/unsaved';
 import { usePaged } from '../../lib/hooks';
 import { addDaysISO, currentWorkDay, fmt12h, fmtTravelDate, humanize, uuid } from '../../lib/format';
@@ -67,22 +66,6 @@ export type BookingRow = {
   vehicle?: { _id: string; registrationNumber: string; capacity?: number } | null;
 };
 
-/** Minimal trip info shown at the top of the assignment modal. */
-export type AssignTarget = {
-  _id: string;
-  reference: string;
-  status: string;
-  travelDate: string;
-  pickupTime: string;
-  timezone?: string;
-  pickupLocation: string;
-  dropLocation: string;
-  passengers: number;
-  employee?: { fullName: string; employeeId: string } | null;
-  currentDriver?: string;
-  currentVehicle?: string;
-};
-
 type EligibleDriver = {
   _id: string;
   fullName: string;
@@ -109,376 +92,13 @@ type EligibleVehicle = {
   // Busy only with trips at other times close by (e.g. 10 PM for an 11 PM ride): the coordinator's call.
   nearby?: { trips: Array<{ name: string; time: string }> } | null;
 };
-type Eligible = { booking: { _id: string; reference: string; passengers: number; scheduledPickupAt: string; status: string }; window: { start: string; end: string }; drivers: EligibleDriver[]; vehicles: EligibleVehicle[] };
 
 export const ASSIGNABLE = ['REQUESTED', 'APPROVED'];
-export const REASSIGNABLE = ['ASSIGNED', 'DRIVER_EN_ROUTE'];
-
-export function toAssignTarget(b: BookingRow): AssignTarget {
-  return {
-    _id: b._id,
-    reference: b.reference,
-    status: b.status,
-    travelDate: b.travelDate,
-    pickupTime: b.pickupTime,
-    timezone: b.timezone,
-    pickupLocation: b.pickupLocation,
-    dropLocation: b.dropLocation,
-    passengers: b.passengers,
-    employee: b.employee,
-    currentDriver: b.driver ? `${b.driver.fullName} (${b.driver.driverCode})` : undefined,
-    currentVehicle: b.vehicle?.registrationNumber,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Assign / reassign modal
-// ---------------------------------------------------------------------------
-function TripSummary({ b }: { b: AssignTarget }) {
-  return (
-    <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-2">
-      <div className="flex items-start gap-2">
-        <User className="mt-0.5 h-4 w-4 text-slate-400" aria-hidden />
-        <div>
-          <p className="font-medium text-slate-900">{b.employee?.fullName ?? '—'}</p>
-          <p className="text-xs text-slate-500">
-            {b.employee?.employeeId} · {b.reference}
-          </p>
-        </div>
-      </div>
-      <div className="flex items-start gap-2">
-        <Clock className="mt-0.5 h-4 w-4 text-slate-400" aria-hidden />
-        <div>
-          <p className="font-medium text-slate-900">
-            {fmtTravelDate(b.travelDate)} · {fmt12h(b.pickupTime)}
-          </p>
-          <p className="text-xs text-slate-500">{b.timezone ? `Office time (${b.timezone})` : 'Office time'}</p>
-        </div>
-      </div>
-      <div className="flex items-start gap-2 sm:col-span-2">
-        <MapPin className="mt-0.5 h-4 w-4 text-slate-400" aria-hidden />
-        <p>
-          <span className="font-medium text-slate-900">{b.pickupLocation}</span>
-          <span className="mx-1 text-slate-400">→</span>
-          <span className="font-medium text-slate-900">{b.dropLocation}</span>
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <Users className="h-4 w-4 text-slate-400" aria-hidden />
-        <span>
-          {b.passengers} passenger{b.passengers === 1 ? '' : 's'}
-        </span>
-      </div>
-      {(b.currentDriver || b.currentVehicle) && (
-        <div className="flex items-center gap-2">
-          <Car className="h-4 w-4 text-slate-400" aria-hidden />
-          <span>
-            Current: {b.currentDriver ?? '—'} / {b.currentVehicle ?? '—'}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Choice({ selected, disabled, onSelect, children }: { selected: boolean; disabled: boolean; onSelect: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      aria-disabled={disabled}
-      disabled={disabled}
-      onClick={onSelect}
-      className={cn(
-        'w-full rounded-lg border p-3 text-left text-sm transition-colors',
-        disabled ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-70' : selected ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500' : 'border-slate-200 bg-white hover:border-slate-400',
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Problems({ problems }: { problems: string[] }) {
-  if (!problems.length) return null;
-  return (
-    <ul className="mt-1 space-y-0.5 text-xs text-red-700">
-      {problems.map((p) => (
-        <li key={p}>• {p}</li>
-      ))}
-    </ul>
-  );
-}
-
-/** Driver and cab choosers with eligibility explained; shared by the single-ride and shared-trip dialogs. */
-function ResourceLists({
-  drivers,
-  vehicles,
-  driverId,
-  vehicleId,
-  onDriver,
-  onVehicle,
-  refreshing,
-  onRefresh,
-}: {
-  drivers: EligibleDriver[];
-  vehicles: EligibleVehicle[];
-  driverId: string;
-  vehicleId: string;
-  onDriver: (d: EligibleDriver) => void;
-  onVehicle: (id: string) => void;
-  refreshing: boolean;
-  onRefresh: () => void;
-}) {
-  const [showIneligible, setShowIneligible] = useState(false);
-  const driver = drivers.find((d) => d._id === driverId);
-  const visibleDrivers = showIneligible ? drivers : drivers.filter((d) => d.eligible || d._id === driverId);
-  const visibleVehicles = showIneligible ? vehicles : vehicles.filter((v) => v.eligible || v._id === vehicleId);
-  return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
-        <span>
-          {drivers.filter((d) => d.eligible).length} of {drivers.length} drivers and {vehicles.filter((v) => v.eligible).length} of {vehicles.length} cabs can take this.
-        </span>
-        <span className="flex items-center gap-2">
-          <label className="inline-flex items-center gap-1.5">
-            <input type="checkbox" className="h-4 w-4 rounded-sm border-slate-300" checked={showIneligible} onChange={(e) => setShowIneligible(e.target.checked)} />
-            Show unavailable
-          </label>
-          <Button size="sm" variant="ghost" onClick={onRefresh} loading={refreshing}>
-            Refresh
-          </Button>
-        </span>
-      </div>
-      <div className="grid gap-4 md:grid-cols-2">
-        <section aria-label="Drivers">
-          <h3 className="mb-2 text-sm font-semibold text-slate-800">1. Driver</h3>
-          <div role="radiogroup" aria-label="Driver" className="max-h-[45vh] space-y-2 overflow-y-auto pr-1">
-            {!visibleDrivers.length ? (
-              <EmptyState title="No available drivers" description={drivers.length ? 'Tick "Show unavailable" to see why each driver cannot take this.' : 'No drivers are registered for this office.'} />
-            ) : (
-              visibleDrivers.map((d) => (
-                <Choice key={d._id} selected={d._id === driverId} disabled={!d.eligible} onSelect={() => onDriver(d)}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-medium text-slate-900">
-                      {d.fullName} <span className="font-normal text-slate-500">({d.driverCode})</span>
-                    </span>
-                    <span className="flex gap-1">
-                      <StatusBadge status={d.availability} />
-                      {d.onDuty ? <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">On duty</span> : null}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {d.phone} · Cab: {d.currentVehicle ? `${d.currentVehicle.registrationNumber} (${d.currentVehicle.capacity} seats)` : 'none'}
-                  </p>
-                  <Problems problems={d.problems} />
-                </Choice>
-              ))
-            )}
-          </div>
-        </section>
-        <section aria-label="Cabs">
-          <h3 className="mb-2 text-sm font-semibold text-slate-800">2. Cab</h3>
-          <div role="radiogroup" aria-label="Cab" className="max-h-[45vh] space-y-2 overflow-y-auto pr-1">
-            {!visibleVehicles.length ? (
-              <EmptyState title="No available cabs" description={vehicles.length ? 'Tick "Show unavailable" to see why each cab cannot be used.' : 'No cabs are registered for this office.'} />
-            ) : (
-              visibleVehicles.map((v) => (
-                <Choice key={v._id} selected={v._id === vehicleId} disabled={!v.eligible} onSelect={() => onVehicle(v._id)}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-mono font-medium text-slate-900">{v.registrationNumber}</span>
-                    <StatusBadge status={v.status} />
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {v.capacity} seats · Driver: {v.currentDriver?.fullName ?? 'none'}
-                    {driver?.currentVehicle?._id === v._id ? ' · this driver’s cab' : ''}
-                  </p>
-                  <Problems problems={v.problems} />
-                </Choice>
-              ))
-            )}
-          </div>
-        </section>
-      </div>
-    </>
-  );
-}
-
-const SERVER_ASSIGN_ERRORS =['SCHEDULE_CONFLICT', 'ALREADY_ASSIGNED', 'NOT_ELIGIBLE', 'INVALID_TRANSITION', 'IDEMPOTENCY_KEY_REUSED'];
-
-export function AssignModal({ open, onClose, booking, mode = 'assign' }: { open: boolean; onClose: () => void; booking: AssignTarget | null; mode?: 'assign' | 'reassign' }) {
-  const qc = useQueryClient();
-  const toast = useToast();
-  const [step, setStep] = useState<1 | 2>(1);
-  const [driverId, setDriverId] = useState('');
-  const [vehicleId, setVehicleId] = useState('');
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [key, setKey] = useState('');
-
-  // New idempotency key + clean state for every time the modal opens.
-  useEffect(() => {
-    if (open) {
-      setKey(uuid());
-      setStep(1);
-      setDriverId('');
-      setVehicleId('');
-      setReason('');
-      setError('');
-    }
-  }, [open, booking?._id]);
-
-  const eligible = useQuery({
-    queryKey: ['ops', 'eligible', booking?._id],
-    queryFn: ({ signal }) => get<Eligible>(`/ops/bookings/${booking!._id}/eligible`, signal),
-    enabled: open && !!booking,
-    staleTime: 0,
-  });
-
-  const drivers = eligible.data?.drivers ?? [];
-  const vehicles = eligible.data?.vehicles ?? [];
-  const driver = drivers.find((d) => d._id === driverId);
-  const vehicle = vehicles.find((v) => v._id === vehicleId);
-
-  // Drop a selection that became ineligible after a refresh.
-  useEffect(() => {
-    if (driver && !driver.eligible) setDriverId('');
-    if (vehicle && !vehicle.eligible) setVehicleId('');
-  }, [driver, vehicle]);
-
-  const pickDriver = (d: EligibleDriver) => {
-    setDriverId(d._id);
-    const linked = d.currentVehicle && vehicles.find((v) => v._id === d.currentVehicle!._id);
-    if (linked && linked.eligible) setVehicleId(linked._id);
-  };
-
-  const confirm = async () => {
-    if (!booking || !driver || !vehicle) return;
-    if (mode === 'reassign' && reason.trim().length < 3) {
-      setError('Please give a reason for the reassignment (at least 3 characters).');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      if (mode === 'assign') {
-        await post(`/ops/bookings/${booking._id}/assign`, { driverId: driver._id, vehicleId: vehicle._id }, { 'Idempotency-Key': key });
-        toast.success('Cab assigned — employee email queued, driver notified', `${booking.reference}: ${vehicle.registrationNumber} · ${driver.fullName}`);
-      } else {
-        await post(`/ops/bookings/${booking._id}/reassign`, { driverId: driver._id, vehicleId: vehicle._id, reason: reason.trim() });
-        toast.success('Cab reassigned — employee email queued, driver notified', `${booking.reference}: ${vehicle.registrationNumber} · ${driver.fullName}`);
-      }
-      qc.invalidateQueries({ queryKey: ['ops'] });
-      onClose();
-    } catch (e) {
-      const msg = errorMessage(e);
-      if (e instanceof ApiError && SERVER_ASSIGN_ERRORS.includes(e.code)) {
-        const extra = e.details as { driverConflicts?: string[]; vehicleConflicts?: string[] } | undefined;
-        const conflicts = [
-          extra?.driverConflicts?.length ? `driver busy with ${extra.driverConflicts.join(', ')}` : '',
-          extra?.vehicleConflicts?.length ? `vehicle busy with ${extra.vehicleConflicts.join(', ')}` : '',
-        ].filter(Boolean);
-        setError(conflicts.length ? `${msg} (${conflicts.join('; ')})` : msg);
-        if (e.code === 'ALREADY_ASSIGNED' || e.code === 'INVALID_TRANSITION') qc.invalidateQueries({ queryKey: ['ops'] });
-        else {
-          setStep(1);
-          eligible.refetch();
-        }
-      } else setError(msg);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const title = mode === 'assign' ? 'Assign cab' : 'Reassign cab';
-
-  return (
-    <Modal
-      open={open}
-      onClose={busy ? () => undefined : onClose}
-      title={step === 1 ? `${title} — select driver & vehicle` : `${title} — review`}
-      size="xl"
-      footer={
-        step === 1 ? (
-          <>
-            <Button variant="secondary" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button onClick={() => setStep(2)} disabled={!driver || !vehicle}>
-              Review assignment
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button variant="secondary" onClick={() => setStep(1)} disabled={busy} icon={<ArrowLeft className="h-4 w-4" />}>
-              Back
-            </Button>
-            <Button variant="success" onClick={confirm} loading={busy} icon={<CheckCircle2 className="h-4 w-4" />}>
-              {mode === 'assign' ? 'Confirm assignment' : 'Confirm reassignment'}
-            </Button>
-          </>
-        )
-      }
-    >
-      {!booking ? null : (
-        <div className="space-y-4">
-          <TripSummary b={booking} />
-          {error && <Alert tone="error">{error}</Alert>}
-
-          {step === 1 ? (
-            eligible.isLoading ? (
-              <Spinner label="Checking driver and vehicle availability…" />
-            ) : eligible.error ? (
-              <ErrorState error={eligible.error} onRetry={eligible.refetch} />
-            ) : (
-              <ResourceLists
-                drivers={drivers}
-                vehicles={vehicles}
-                driverId={driverId}
-                vehicleId={vehicleId}
-                onDriver={pickDriver}
-                onVehicle={setVehicleId}
-                refreshing={eligible.isFetching}
-                onRefresh={() => eligible.refetch()}
-              />
-            )
-          ) : (
-            <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-lg border border-slate-200 p-3 text-sm">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Driver</p>
-                  <p className="mt-1 font-medium text-slate-900">
-                    {driver?.fullName} ({driver?.driverCode})
-                  </p>
-                  <p className="text-slate-600">{driver?.phone}</p>
-                </div>
-                <div className="rounded-lg border border-slate-200 p-3 text-sm">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Vehicle</p>
-                  <p className="mt-1 font-medium text-slate-900">{vehicle?.registrationNumber}</p>
-                  <p className="text-slate-600">
-                    {vehicle?.model ? `${vehicle.model} · ` : ''}{vehicle?.capacity} seats
-                  </p>
-                </div>
-              </div>
-              {mode === 'reassign' && (
-                <Textarea label="Reason for reassignment" required value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Original driver reported a breakdown" />
-              )}
-              <Alert tone="info" title="What happens next">
-                <ul className="list-disc space-y-0.5 pl-4">
-                  <li>The employee is emailed the vehicle number and driver details, and sees a ride-start PIN in their booking.</li>
-                  <li>The driver is notified and the ride is theirs — no acceptance needed.</li>
-                  {mode === 'reassign' && <li>The previous assignment is closed and its PIN revoked; a new PIN is issued.</li>}
-                </ul>
-              </Alert>
-            </div>
-          )}
-        </div>
-      )}
-    </Modal>
-  );
-}
+// The cab can be changed only until the driver starts the trip; after that a cab problem is the
+// driver's to report, and the riders come back here to assign again.
+export const REASSIGNABLE = ['ASSIGNED'];
+/** Rides of trips the driver has started (anyone in the cab on the way, picked up or dropped). */
+export const TRIP_STARTED = ['DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS', 'COMPLETED', 'NO_SHOW'];
 
 // ---------------------------------------------------------------------------
 // Shared trip: several selected rides → one driver + cab
@@ -492,12 +112,12 @@ const seatsOf = (rides: BookingRow[]) => rides.reduce((n, r) => n + (r.passenger
  * the cabs that can take every ticked ride: active, with a driver, neither of them on another ride
  * at that time, and with a seat for everyone. Picking a cab picks its driver; one click assigns.
  */
-function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow[]; onClear: () => void; onDone: () => void; change?: boolean }) {
+export function PoolBar({ rides, onClear, onDone, change = false, startOpen = false }: { rides: BookingRow[]; onClear: () => void; onDone: () => void; change?: boolean; startOpen?: boolean }) {
   const qc = useQueryClient();
   const toast = useToast();
   const ids = useMemo(() => rides.map((r) => r._id).sort(), [rides]);
   // Change mode: one assigned ride moves to another free cab (with a reason); the list opens at once.
-  const [open, setOpen] = useState(change);
+  const [open, setOpen] = useState(change || startOpen);
   const [reason, setReason] = useState('');
   const current = change ? rides[0] : undefined;
   // A typed reason for changing the cab isn't thrown away without asking.
@@ -547,8 +167,9 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
       return { v, driver, usable: !why, why };
     });
   const usable = cabs.filter((c) => c.usable).sort((a, b) => a.v.capacity - b.v.capacity || a.v.registrationNumber.localeCompare(b.v.registrationNumber));
-  // Cabs already going at this time with room: the riders can be added to that trip (new rides only).
-  const joinable = change ? [] : cabs.filter((c) => !c.usable && c.v.join);
+  // Cabs already going at this time with room: the riders can be added to that trip (also a ride
+  // moving cab: A and B share a cab, A moves to C's cab, so A + C share and B rides alone).
+  const joinable = cabs.filter((c) => !c.usable && c.v.join);
   // Cabs with another trip at a different time close by: selectable, the coordinator decides (new rides only).
   const nearbyCabs = change ? [] : cabs.filter((c) => !c.usable && !c.v.join && c.v.nearby && c.driver);
   const unusable = cabs.filter((c) => !c.usable && !joinable.includes(c) && !nearbyCabs.includes(c));
@@ -568,17 +189,25 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
     setBusy(true);
     setError('');
     try {
-      await post(`/ops/bookings/${current._id}/reassign`, { driverId: chosen.driver._id, vehicleId: chosen.v._id, reason: reason.trim() });
-      toast.success('Cab changed', `${current.employee?.fullName}: now ${chosen.v.registrationNumber} · ${chosen.driver.fullName}. The employee and both drivers are notified.`);
+      await post(`/ops/bookings/${current._id}/reassign`, {
+        driverId: chosen.driver._id,
+        vehicleId: chosen.v._id,
+        reason: reason.trim(),
+        ...(join ? { joinTripId: join.tripId } : {}),
+      });
+      toast.success(
+        join ? `Moved to ${join.tripName}` : 'Cab changed',
+        `${current.employee?.fullName}: now ${chosen.v.registrationNumber} · ${chosen.driver.fullName}. The employee and both drivers are notified.`,
+      );
       qc.invalidateQueries({ queryKey: ['ops'] });
       onDone();
     } catch (e) {
       setError(errorMessage(e));
       const code = e instanceof ApiError ? e.code : '';
-      if (code === 'SCHEDULE_CONFLICT' || code === 'NOT_ELIGIBLE') {
+      if (code === 'SCHEDULE_CONFLICT' || code === 'NOT_ELIGIBLE' || code === 'TRIP_CHANGED') {
         setVehicleId('');
         eligible.refetch();
-      } else if (code === 'INVALID_TRANSITION') qc.invalidateQueries({ queryKey: ['ops'] });
+      } else if (code === 'INVALID_TRANSITION' || code === 'TRIP_STARTED') qc.invalidateQueries({ queryKey: ['ops'] });
     } finally {
       setBusy(false);
     }
@@ -630,7 +259,11 @@ function PoolBar({ rides, onClear, onDone, change = false }: { rides: BookingRow
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:p-4">
         <div className="min-w-0 text-sm">
           <p className="font-semibold text-slate-900">
-            {current ? `Change cab · ${current.employee?.fullName ?? current.reference}` : `${rides.length} ${rides.length === 1 ? 'ride' : 'rides'} selected`}
+            {current
+              ? `Change cab · ${current.employee?.fullName ?? current.reference}`
+              : startOpen && rides.length === 1
+                ? `Assign cab · ${rides[0].employee?.fullName ?? rides[0].reference}`
+                : `${rides.length} ${rides.length === 1 ? 'ride' : 'rides'} selected`}
           </p>
           <p className="truncate text-slate-500">
             {current ? (
@@ -1081,6 +714,8 @@ export default function Bookings({ history = false }: { history?: boolean }) {
   const { data, isLoading, error, refetch } = usePaged<BookingRow>(['ops', 'bookings'], '/ops/bookings', query);
   // Only rides still waiting (and on screen) can be pooled; anything else drops out of the selection.
   const selectedRides = useMemo(() => (data?.items ?? []).filter((r) => selected.has(r._id) && ASSIGNABLE.includes(r.status)), [data, selected]);
+  // Shared cabs the driver has started: none of their riders can change cab any more.
+  const startedTrips = useMemo(() => new Set((data?.items ?? []).filter((r) => r.assignment?.tripId && TRIP_STARTED.includes(r.status)).map((r) => r.assignment!.tripId!)), [data]);
   useEffect(() => {
     if (selected.size && selectedRides.length !== selected.size) setSelected(new Set(selectedRides.map((r) => r._id)));
   }, [selected, selectedRides]);
@@ -1221,7 +856,7 @@ export default function Bookings({ history = false }: { history?: boolean }) {
             </Button>,
           );
         } else if (['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'].includes(b.status)) {
-          if (REASSIGNABLE.includes(b.status))
+          if (REASSIGNABLE.includes(b.status) && !(b.assignment?.tripId && startedTrips.has(b.assignment.tripId)))
             buttons.push(
               <Button
                 key="ch"

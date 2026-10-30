@@ -63,3 +63,10 @@ export async function revokeAllSessions(userId: unknown, reason: string) {
   const { disconnectUserSockets } = await import('../realtime.js');
   await disconnectUserSockets(String(userId));
 }
+
+/** Signs the user out everywhere except this session (e.g. after they change their password). */
+export async function revokeOtherSessions(userId: unknown, keepSessionId: string, reason: string) {
+  await Session.updateMany({ user: userId, revokedAt: null, _id: { $ne: keepSessionId } }, { $set: { revokedAt: new Date(), revokeReason: reason } });
+  const { disconnectUserSockets } = await import('../realtime.js');
+  await disconnectUserSockets(String(userId), keepSessionId);
+}

@@ -40,7 +40,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       setConnected(true);
       refreshAll();
     });
-    socket.on('disconnect', () => setConnected(false));
+    socket.on('disconnect', (reason) => {
+      setConnected(false);
+      // The server closed it (e.g. the offices a coordinator handles changed): reconnect to join the
+      // right updates. A signed-out session is refused on reconnect and stays closed.
+      if (reason === 'io server disconnect') socket.connect();
+    });
     socket.on('notification', (n: { title: string; body: string }) => {
       refreshAll();
       toast.info(n.title, n.body);

@@ -13,7 +13,7 @@ import { SYSTEM_ACTOR } from './audit.service.js';
 import { refreshDriverAvailability } from './availability.service.js';
 import { processOutboxBatch } from './email/outbox.worker.js';
 import { alertOperations } from './alert.service.js';
-import { cancelBookingInternal } from './booking.service.js';
+import { cancelBookingInternal, workDayMatch } from './booking.service.js';
 import { bookingEmailParams, broadcastBookingUpdate, notifyCoordinators, recordEvent } from './lifecycle.js';
 import { enqueueEmail, notifyInApp } from './notification.service.js';
 import { getPolicy } from './policy.service.js';
@@ -45,11 +45,11 @@ export async function detectLatePickups(now = new Date()) {
       const updated = await CabRequest.findOneAndUpdate({ _id: b._id, isDelayed: { $ne: true } }, { $set: { isDelayed: true, delayReason: 'Driver has not arrived at the pickup location' } }, { new: true, session: tx.session });
       if (!updated) return;
       await recordEvent(tx, updated, 'LATE_PICKUP_DETECTED', SYSTEM_ACTOR, { assignmentId: updated.currentAssignment });
-      await notifyCoordinators(tx, b.officeLocation, { type: 'LATE_PICKUP', title: 'Late pickup', body: `${b.reference}: driver has not arrived`, data: { bookingId: String(b._id) }, idempotencyKey: `late:${b._id}` });
+      await notifyCoordinators(tx, b.officeLocation, { type: 'LATE_PICKUP', title: 'Late pickup', body: `${b.reference}: driver has not arrived`, data: { bookingId: String(b._id) }, idempotencyKey: `late:${b._id}:${b.currentAssignment}` });
       const emp = await Employee.findById(b.employee).session(tx.session).lean();
-      await notifyInApp(tx, { userId: String(b.employeeUser), type: 'BOOKING_DELAYED', title: 'Your cab is running late', body: `${b.reference}: the transport team has been alerted.`, data: { bookingId: String(b._id) }, idempotencyKey: `late-emp:${b._id}` });
+      await notifyInApp(tx, { userId: String(b.employeeUser), type: 'BOOKING_DELAYED', title: 'Your cab is running late', body: `${b.reference}: the transport team has been alerted.`, data: { bookingId: String(b._id) }, idempotencyKey: `late-emp:${b._id}:${b.currentAssignment}` });
       if (emp) {
-        await enqueueEmail(tx.session, { idempotencyKey: `late:${b._id}`, template: 'TRIP_DELAYED', to: emp.email, toUserId: String(b.employeeUser), params: bookingEmailParams(b, emp.fullName), relatedBookingId: String(b._id), preference: 'emailOnDelay' });
+        await enqueueEmail(tx.session, { idempotencyKey: `late:${b._id}:${b.currentAssignment}`, template: 'TRIP_DELAYED', to: emp.email, toUserId: String(b.employeeUser), params: bookingEmailParams(b, emp.fullName), relatedBookingId: String(b._id), preference: 'emailOnDelay' });
       }
       tx.afterCommit(() => broadcastBookingUpdate(updated));
     });
@@ -175,7 +175,7 @@ export async function sendDailyBookingReminders(now: Date) {
     const signedIn = await User.find({ role: 'EMPLOYEE', status: 'ACTIVE' }, { _id: 1 }).lean();
     const employees = await Employee.find({ officeLocation: office.code, deletedAt: null, user: { $in: signedIn.map((u) => u._id) } }, { fullName: 1, email: 1, user: 1 }).lean();
     const booked = new Set(
-      (await CabRequest.distinct('employee', { employee: { $in: employees.map((e) => e._id) }, status: { $in: OPEN_STATUSES }, $or: [{ shiftDate: tomorrow }, { travelDate: tomorrow }] })).map(String),
+      (await CabRequest.distinct('employee', { employee: { $in: employees.map((e) => e._id) }, status: { $in: OPEN_STATUSES }, ...workDayMatch(tomorrow) })).map(String),
     );
     for (const e of employees) {
       if (booked.has(String(e._id))) continue;

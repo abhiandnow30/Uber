@@ -55,11 +55,11 @@ export const BOOKING_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
   REQUESTED: ['ASSIGNED', 'CANCELLED', 'REJECTED'],
   PENDING_APPROVAL: ['APPROVED', 'REJECTED', 'CANCELLED'],
   APPROVED: ['ASSIGNED', 'CANCELLED', 'REJECTED'],
-  // back to REQUESTED/APPROVED happens when a driver declines;
-  // → ASSIGNED again happens when a coordinator reassigns to another driver/vehicle
+  // back to REQUESTED/APPROVED happens when the cab can't do the ride (breakdown, out of fuel...)
+  // before the rider is picked up; → ASSIGNED again when a coordinator changes the cab (before it starts)
   ASSIGNED: ['DRIVER_EN_ROUTE', 'CANCELLED', 'REQUESTED', 'APPROVED', 'ASSIGNED'],
   DRIVER_EN_ROUTE: ['ARRIVED', 'CANCELLED', 'REQUESTED', 'APPROVED', 'ASSIGNED'],
-  ARRIVED: ['IN_PROGRESS', 'NO_SHOW', 'CANCELLED'],
+  ARRIVED: ['IN_PROGRESS', 'NO_SHOW', 'CANCELLED', 'REQUESTED', 'APPROVED'],
   IN_PROGRESS: ['COMPLETED', 'CANCELLED'], // CANCELLED here = interrupted trip, coordinator/admin only
   COMPLETED: [],
   CANCELLED: [],

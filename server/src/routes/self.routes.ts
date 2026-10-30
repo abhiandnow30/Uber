@@ -22,6 +22,8 @@ import {
   completeTrip,
   driverCancel,
   driverCancelSchema,
+  cabProblemSchema,
+  reportCabProblem,
   driverHome,
   driverRide,
   driverRideHistory,
@@ -144,7 +146,11 @@ driverRouter.post('/rides/:id/acknowledge', async (req, res) => {
 driverRouter.post('/rides/:id/decline', () => {
   throw new AppError(403, 'DRIVER_CANNOT_CANCEL', "Drivers can't cancel a ride. Please call your transport coordinator.");
 });
-// …but they may cancel because of the employee (no-show, not coming, other).
+// The cab can't do the trip (puncture, out of fuel...): riders not yet picked up go back to the coordinator.
+driverRouter.post('/rides/:id/problem', async (req, res) => {
+  res.json(await reportCabProblem(actorFromRequest(req), objectId(req.params.id, 'Ride'), body(cabProblemSchema, req)));
+});
+// …and they may cancel because of the employee (no-show, not coming, other).
 driverRouter.post('/rides/:id/cancel', async (req, res) => {
   res.json(await driverCancel(actorFromRequest(req), objectId(req.params.id, 'Ride'), body(driverCancelSchema, req)));
 });

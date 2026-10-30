@@ -7,7 +7,7 @@ import { fmt12h, fmtDateTime } from '../../lib/format';
 import { fieldErrors } from '../../lib/hooks';
 import type { Office, Shift } from '../../lib/policy';
 import { changed, useUnsavedChanges } from '../../lib/unsaved';
-import { MapLinkField, sameSpot } from '../../components/LocationPicker';
+import { MapLinkField, sameSpot, type MapSpot } from '../../components/LocationPicker';
 
 type FullPolicy = {
   _id: string;
@@ -355,6 +355,9 @@ function OfficesSection({ values, onState }: { values: Office[]; onState: (s: Au
     t.touch(i);
     void s.commit();
   };
+  // A link being typed or read stays here until it is read (or cleared): only then does the
+  // office save, so its location is never dropped or paired with a link it didn't come from.
+  const [linkDrafts, setLinkDrafts] = useState<Record<number, MapSpot>>({});
 
   return (
     <Card
@@ -394,6 +397,7 @@ function OfficesSection({ values, onState }: { values: Office[]; onState: (s: Au
                 icon={<Trash2 className="h-4 w-4" />}
                 onClick={() => {
                   t.reset();
+                  setLinkDrafts({});
                   void s.commit(rows.filter((_, j) => j !== i));
                 }}
               />
@@ -401,12 +405,16 @@ function OfficesSection({ values, onState }: { values: Office[]; onState: (s: Au
             <div className="sm:col-span-2 lg:col-span-12">
               <MapLinkField
                 label="Google Maps link of the office"
-                spot={{ link: r.mapLink ?? '', pin: r.location ?? null }}
-                saved={officeSpotSaved(r, values)}
+                spot={linkDrafts[i] ?? { link: r.mapLink ?? '', pin: r.location ?? null }}
+                saved={!linkDrafts[i] && officeSpotSaved(r, values)}
                 onSpot={(v) => {
-                  const next = edit(i, { mapLink: v.link, location: v.pin ?? undefined });
-                  // Typing only changes the box; the office saves once its location is read (or removed).
-                  if (JSON.stringify(v.pin) !== JSON.stringify(r.location ?? null)) {
+                  if (!v.pin && v.link.trim()) {
+                    setLinkDrafts((d) => ({ ...d, [i]: v }));
+                    return;
+                  }
+                  setLinkDrafts(({ [i]: _done, ...rest }) => rest);
+                  const next = edit(i, { mapLink: v.pin ? v.link : '', location: v.pin ?? undefined });
+                  if (JSON.stringify(v.pin) !== JSON.stringify(r.location ?? null) || (v.pin && v.link.trim() !== (r.mapLink ?? '').trim())) {
                     t.touch(i);
                     void s.commit(next);
                   } else s.set(next);

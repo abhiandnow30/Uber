@@ -17,6 +17,8 @@ import { alertOperations } from './alert.service.js';
 import { phoneKey } from './driverAuth.service.js';
 import { activeOfficeCodes } from './policy.service.js';
 import { assertInScope, officeScope, scopeFilter } from './scope.service.js';
+import { revokeAllSessions } from './session.service.js';
+import { releaseRides } from './trip.service.js';
 
 const dateStr = z.coerce.date();
 
@@ -92,7 +94,9 @@ export async function updateDriver(actor: Actor, id: string, input: z.infer<type
     if ((err as { code?: number }).code === 11000) throw conflict('A driver with this license number already exists');
     throw err;
   }
-  if (input.fullName || input.phone) await User.updateOne({ _id: driver.user }, { $set: { name: driver.fullName, phone: driver.phone } });
+  if (driver.user && (input.fullName || input.phone)) await User.updateOne({ _id: driver.user }, { $set: { name: driver.fullName, phone: driver.phone } });
+  // The mobile number is how the driver signs in: a new number signs the old one out everywhere.
+  if (driver.user && input.phone && phoneKey(input.phone) !== phoneKey(before.phone ?? '')) await revokeAllSessions(driver.user, 'DRIVER_PHONE_CHANGED');
   await audit(actor, 'DRIVER_UPDATED', 'Driver', driver._id, `Driver ${driver.driverCode} updated`, {
     changes: Object.fromEntries(Object.keys(input).map((k) => [k, { from: (before as Record<string, unknown>)[k], to: (input as Record<string, unknown>)[k] }])),
   });
@@ -129,15 +133,21 @@ export const employmentSchema = z.object({ employmentStatus: z.enum(DRIVER_EMPLO
 
 export async function setDriverEmployment(actor: Actor, id: string, input: z.infer<typeof employmentSchema>) {
   const driver = await loadDriverInScope(actor, id);
-  return withTransaction(async (tx) => {
+  const result = await withTransaction(async (tx) => {
     await Driver.updateOne({ _id: driver._id }, { $set: { employmentStatus: input.employmentStatus } }, { session: tx.session });
     if (input.employmentStatus !== 'ACTIVE') {
       const active = await CabAssignment.find({ driver: driver._id, status: 'ACTIVE' }).session(tx.session);
+      // Rides they haven't picked up yet go back to the queue for another cab; riders already in
+      // the cab are finished by the transport team.
+      const released = new Set((await releaseRides(tx, active, actor, `Driver is now ${input.employmentStatus.toLowerCase()}`)).map((b) => String(b._id)));
       for (const a of active) {
+        const waiting = released.has(String(a.booking));
         await alertOperations(
           {
             type: 'DRIVER_UNAVAILABLE_WITH_ASSIGNMENTS',
-            message: `Driver ${driver.fullName} is now ${input.employmentStatus} but holds booking ${a.bookingReference}. Reassign it.`,
+            message: waiting
+              ? `Driver ${driver.fullName} is now ${input.employmentStatus}: booking ${a.bookingReference} is waiting for another cab.`
+              : `Driver ${driver.fullName} is now ${input.employmentStatus} but has booking ${a.bookingReference} on board. Finish it from the booking.`,
             officeLocation: a.officeLocation,
             bookingId: String(a.booking),
             dedupeKey: `DRIVER_EMPLOYMENT:${a._id}:${input.employmentStatus}`,
@@ -150,6 +160,9 @@ export async function setDriverEmployment(actor: Actor, id: string, input: z.inf
     await audit(actor, 'DRIVER_EMPLOYMENT_CHANGED', 'Driver', driver._id, `Driver ${driver.driverCode}: ${driver.employmentStatus} → ${input.employmentStatus}`, input, tx.session);
     return Driver.findById(driver._id).session(tx.session);
   });
+  // A driver who isn't working any more is signed out at once (they can't sign back in either).
+  if (input.employmentStatus !== 'ACTIVE' && driver.user) await revokeAllSessions(driver.user, `DRIVER_${input.employmentStatus}`);
+  return result;
 }
 
 export const unavailabilitySchema = z
@@ -279,10 +292,15 @@ export async function updateVehicle(actor: Actor, id: string, input: z.infer<typ
     await assertOffice(input.officeLocation);
   }
   if (input.capacity !== undefined && input.capacity < vehicle.capacity) {
-    const tooBig = await CabAssignment.find({ vehicle: vehicle._id, status: 'ACTIVE' }).populate('booking', 'passengers').lean();
-    if (tooBig.some((a) => ((a.booking as unknown as { passengers: number })?.passengers ?? 0) > input.capacity!)) {
-      throw conflict('Capacity cannot be reduced below passenger counts of upcoming assignments');
+    // Riders sharing the cab ride together, so a shared trip needs a seat for each of them.
+    const upcoming = await CabAssignment.find({ vehicle: vehicle._id, status: 'ACTIVE' }).populate('booking', 'passengers').lean();
+    const seats = new Map<string, number>();
+    for (const a of upcoming) {
+      const key = a.tripId ?? String(a._id);
+      seats.set(key, (seats.get(key) ?? 0) + ((a.booking as unknown as { passengers?: number } | null)?.passengers ?? 1));
     }
+    const most = Math.max(0, ...seats.values());
+    if (most > input.capacity) throw conflict(`This cab has an upcoming trip with ${most} riders, so it needs at least ${most} seats`);
   }
   vehicle.set(input);
   await vehicle.save();

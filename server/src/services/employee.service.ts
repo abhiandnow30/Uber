@@ -14,6 +14,7 @@ import { employeesUseMicrosoftOnly, issueActivation, normalizeEmail } from './au
 import { cancelBookingInternal } from './booking.service.js';
 import { activeOfficeCodes, getPolicy } from './policy.service.js';
 import { revokeAllSessions } from './session.service.js';
+import { noteChange } from '../realtime.js';
 
 export const EMPLOYEE_ID_RE = /^[A-Z0-9][A-Z0-9_-]{1,29}$/;
 export const PHONE_RE = /^\+?[0-9][0-9 ()-]{6,19}$/;
@@ -148,6 +149,7 @@ export async function updateEmployee(actor: Actor, id: string, patch: z.infer<ty
     if (changes.homeAddress) employee.homeAddressUpdatedAt = new Date();
     await employee.save({ session });
     await audit(actor, 'EMPLOYEE_UPDATED', 'Employee', employee._id, `Employee ${employee.employeeId} updated`, { changes }, session);
+    noteChange({ users: [employee.user], offices: [employee.officeLocation] });
     return employee;
   });
 }

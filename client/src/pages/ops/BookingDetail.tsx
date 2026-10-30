@@ -20,7 +20,7 @@ import {
 } from '../../components/ui';
 import { get, post } from '../../lib/api';
 import { fmt12h, fmtDateTime, fmtRelative, fmtTravelDate, humanize, mapsDirectionsUrl } from '../../lib/format';
-import { ASSIGNABLE, AssignModal, REASSIGNABLE, type AssignTarget } from './Bookings';
+import { ASSIGNABLE, PoolBar, REASSIGNABLE, type BookingRow } from './Bookings';
 
 type Person = { _id: string; name: string } | null | undefined;
 type Assignment = {
@@ -52,6 +52,8 @@ type Assignment = {
   completionOverrideReason?: string;
   endedAt?: string;
   endReason?: string;
+  tripId?: string;
+  tripName?: string;
   createdAt: string;
 };
 type HistoryRow = {
@@ -75,6 +77,12 @@ type BookingDetailData = {
   pickupTime: string;
   timezone: string;
   scheduledPickupAt: string;
+  // IN = home → office (reach by reportBy; the coordinator sets the pickup), OUT = office → home.
+  direction?: 'IN' | 'OUT';
+  reportBy?: string;
+  pickupTimeSet?: boolean;
+  // The driver has started this ride's trip (for anyone in a shared cab): its cab can't change now.
+  tripStarted?: boolean;
   passengers: number;
   tripType: string;
   leg?: string;
@@ -175,7 +183,7 @@ export default function BookingDetail() {
   const current = b.assignments.find((a) => a._id === b.currentAssignment) ?? null;
   const isOpen = OPEN.includes(b.status);
   const rideNotStarted = ['ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED'].includes(b.status);
-  const pinNeedsRegen = !!b.pinState && ['LOCKED', 'EXPIRED'].includes(b.pinState.status) && rideNotStarted;
+  const pinNeedsRegen = !!b.pinState && ['LOCKED', 'EXPIRED', 'REVOKED'].includes(b.pinState.status) && rideNotStarted;
 
   const actions: Record<ActionKey, ActionDef> = {
     approve: {
@@ -307,20 +315,31 @@ export default function BookingDetail() {
     qc.invalidateQueries({ queryKey: ['ops'] });
   };
 
-  const assignTarget: AssignTarget = {
+  // The same cab picker as the bookings list: free cabs, cabs already going at that time (the ride
+  // joins that shared cab), and for rides to the office the pickup time.
+  const asRow: BookingRow = {
     _id: b._id,
     reference: b.reference,
     status: b.status,
     travelDate: b.travelDate,
     pickupTime: b.pickupTime,
+    scheduledPickupAt: b.scheduledPickupAt,
     timezone: b.timezone,
+    direction: b.direction,
+    reportBy: b.reportBy,
+    pickupTimeSet: b.pickupTimeSet,
     pickupLocation: b.pickupLocation,
     dropLocation: b.dropLocation,
     passengers: b.passengers,
+    tripType: b.tripType,
+    officeLocation: b.officeLocation,
     employee: b.employee,
-    currentDriver: current?.driver ? `${current.driver.fullName} (${current.driver.driverCode})` : undefined,
-    currentVehicle: current?.vehicle?.registrationNumber,
+    assignment: current ? { _id: current._id, tripId: current.tripId, tripName: current.tripName } : undefined,
+    driver: current?.driver ?? null,
+    vehicle: current?.vehicle ?? null,
   };
+  // The driver has started this ride's trip (for anyone in a shared cab): its cab can't change now.
+  const tripStarted = !!b.tripStarted;
 
   const assignmentCols: Column<Assignment>[] = [
     {
@@ -413,9 +432,9 @@ export default function BookingDetail() {
               </>
             )}
             {ASSIGNABLE.includes(b.status) && <Button onClick={() => setAssignMode('assign')}>Assign cab</Button>}
-            {REASSIGNABLE.includes(b.status) && (
+            {REASSIGNABLE.includes(b.status) && !tripStarted && (
               <Button variant="secondary" onClick={() => setAssignMode('reassign')}>
-                Reassign
+                Change cab
               </Button>
             )}
             {b.status === 'ARRIVED' && (
@@ -646,7 +665,7 @@ export default function BookingDetail() {
           reasonMinLength={def.reasonMinLength}
         />
       )}
-      <AssignModal open={!!assignMode} mode={assignMode ?? 'assign'} booking={assignTarget} onClose={() => setAssignMode(null)} />
+      {assignMode && <PoolBar key={assignMode} rides={[asRow]} change={assignMode === 'reassign'} startOpen onClear={() => setAssignMode(null)} onDone={() => setAssignMode(null)} />}
     </>
   );
 }

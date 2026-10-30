@@ -10,6 +10,7 @@ import { audit, type Actor } from './audit.service.js';
 import { normalizeEmail } from './auth.service.js';
 import { emailDomainAllowed, PHONE_RE } from './employee.service.js';
 import { getPolicy } from './policy.service.js';
+import { disconnectUserSockets } from '../realtime.js';
 import { revokeAllSessions } from './session.service.js';
 
 export const coordinatorSchema = z.object({
@@ -53,6 +54,10 @@ export async function updateCoordinator(actor: Actor, id: string, input: Partial
   await coord.save();
   await User.updateOne({ _id: coord.user }, { $set: { name: coord.fullName, phone: coord.phone } });
   await audit(actor, 'COORDINATOR_UPDATED', 'Coordinator', coord._id, `Coordinator ${coord.email} updated`, { before, after: input });
+  // Their live connection follows the offices they handle: it reconnects and joins the new ones.
+  if (input.officeLocations && [...before.officeLocations].sort().join() !== [...input.officeLocations].sort().join() && coord.user) {
+    await disconnectUserSockets(String(coord.user));
+  }
   return coord;
 }
 
